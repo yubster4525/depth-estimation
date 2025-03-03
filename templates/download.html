@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Monocular Depth Estimation - Download Models</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.0/dist/css/bootstrap.min.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div class="container my-5">
+        <header class="text-center mb-5">
+            <h1>Download Required Models</h1>
+            <p class="lead">The models need to be downloaded before using the application</p>
+        </header>
+
+        <div class="row justify-content-center">
+            <div class="col-md-8">
+                <div class="card shadow">
+                    <div class="card-header bg-primary text-white">
+                        <h2 class="h5 mb-0">Model Download Instructions</h2>
+                    </div>
+                    <div class="card-body">
+                        <div class="alert alert-info">
+                            <p>
+                                <strong>Required models are not found!</strong> You need to download the models before using the application.
+                            </p>
+                            {% if missing_models %}
+                            <p>Missing models: {{ missing_models|join(', ') }}</p>
+                            {% endif %}
+                        </div>
+                        
+                        <h4 class="mt-4">Option 1: Automatic Download</h4>
+                        <p>Run the model downloader script from the command line:</p>
+                        <div class="bg-dark text-light p-3 rounded">
+                            <pre><code>cd /path/to/depth-estimation
+python model_downloader.py</code></pre>
+                        </div>
+                        
+                        <h4 class="mt-4">Option 2: Manual Download</h4>
+                        <p>Download the following models and place them in the <code>models/downloads</code> directory:</p>
+                        
+                        <ul class="list-group mb-4">
+                            <li class="list-group-item">
+                                <strong>MiDaS Small:</strong> <a href="https://github.com/intel-isl/MiDaS/releases/download/v2_1/model-small.onnx" target="_blank">Download Link</a>
+                                <br>Save as: <code>models/downloads/midas_small.onnx</code>
+                            </li>
+                            <li class="list-group-item">
+                                <strong>DPT Hybrid:</strong> <a href="https://github.com/intel-isl/DPT/releases/download/1_0/dpt_hybrid-midas-501f0c75.pt" target="_blank">Download Link</a>
+                                <br>Save as: <code>models/downloads/dpt_hybrid.pt</code>
+                            </li>
+                            <li class="list-group-item">
+                                <strong>DPT Large:</strong> <a href="https://github.com/intel-isl/DPT/releases/download/1_0/dpt_large-midas-2f21e586.pt" target="_blank">Download Link</a>
+                                <br>Save as: <code>models/downloads/dpt_large.pt</code>
+                            </li>
+                            <li class="list-group-item">
+                                <strong>MonoDepth2:</strong> <a href="https://storage.googleapis.com/niantic-lon-static/research/monodepth2/mono_640x192.zip" target="_blank">Download Link</a>
+                                <br>Extract to: <code>models/downloads/monodepth2/</code>
+                            </li>
+                        </ul>
+                        
+                        <a href="/" class="btn btn-primary">Refresh Application</a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

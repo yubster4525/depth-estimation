@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Monocular Depth Estimation</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.0/dist/css/bootstrap.min.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div class="container my-5">
+        <header class="text-center mb-5">
+            <h1>Monocular Depth Estimation</h1>
+            <p class="lead">Upload an image to estimate its depth map using various AI models</p>
+        </header>
+
+        <div class="row">
+            <div class="col-md-6 mb-4">
+                <div class="card shadow-sm">
+                    <div class="card-header bg-primary text-white">
+                        <h3 class="card-title h5 mb-0">Upload Image</h3>
+                    </div>
+                    <div class="card-body">
+                        <form id="upload-form" enctype="multipart/form-data">
+                            <div class="mb-3">
+                                <label for="image-upload" class="form-label">Select an image:</label>
+                                <input type="file" class="form-control" id="image-upload" name="file" accept="image/*">
+                            </div>
+                            
+                            <div class="mb-3">
+                                <label class="form-label">Select a model:</label>
+                                <div class="d-flex flex-wrap gap-2">
+                                    {% for model_id, model in models.items() %}
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="radio" name="model" id="model-{{ model_id }}" 
+                                            value="{{ model_id }}" {% if model_id == 'dpt-hybrid' %}checked{% endif %}>
+                                        <label class="form-check-label" for="model-{{ model_id }}">
+                                            {{ model.name }}
+                                            <span class="text-muted small d-block">{{ model.description }}</span>
+                                        </label>
+                                    </div>
+                                    {% endfor %}
+                                </div>
+                            </div>
+                            
+                            <div class="d-grid gap-2">
+                                <button type="submit" class="btn btn-primary" id="submit-btn">Process Image</button>
+                                <button type="button" class="btn btn-secondary" id="evaluate-btn" disabled>Evaluate All Models</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="col-md-6 mb-4">
+                <div class="card shadow-sm">
+                    <div class="card-header bg-success text-white">
+                        <h3 class="card-title h5 mb-0">Original Image</h3>
+                    </div>
+                    <div class="card-body p-0">
+                        <div id="preview-container" class="text-center p-3">
+                            <p class="text-muted mb-0">Upload an image to see preview</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Results section -->
+        <div id="results-section" class="my-4" style="display: none;">
+            <h2 class="h3 mb-4">Depth Estimation Results</h2>
+            
+            <div class="row">
+                <div class="col-md-12 mb-4">
+                    <div class="card shadow-sm">
+                        <div class="card-header d-flex justify-content-between align-items-center">
+                            <h3 class="card-title h5 mb-0">Side-by-Side Comparison</h3>
+                            <span class="badge bg-primary" id="model-used"></span>
+                        </div>
+                        <div class="card-body p-0">
+                            <div id="comparison-container" class="text-center"></div>
+                        </div>
+                        <div class="card-footer">
+                            <div class="d-flex justify-content-between text-muted small">
+                                <div>Inference time: <span id="inference-time"></span> seconds</div>
+                                <div>Depth range: <span id="depth-range"></span></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Evaluation section -->
+        <div id="evaluation-section" class="my-4" style="display: none;">
+            <h2 class="h3 mb-4">Model Evaluation</h2>
+            <div class="row" id="evaluation-results">
+                <!-- Results will be inserted here -->
+            </div>
+        </div>
+    </div>
+    
+    <!-- Loading overlay -->
+    <div id="loading-overlay" style="display: none;">
+        <div class="spinner-container">
+            <div class="spinner-border text-light" role="status">
+                <span class="visually-hidden">Loading...</span>
+            </div>
+            <p class="text-light mt-2">Processing image...</p>
+        </div>
+    </div>
+    
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+</body>
+</html>
