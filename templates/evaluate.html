@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ground Truth Evaluation - Monocular Depth Estimation</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Ground Truth Evaluation</h1>
+            <p>Upload an image and its corresponding ground truth depth map to evaluate model performance</p>
+        </header>
+
+        <nav>
+            <a href="/" class="nav-link">Back to Demo</a>
+        </nav>
+
+        <section class="upload-section">
+            <form id="evaluation-form" enctype="multipart/form-data">
+                <div class="form-group">
+                    <label for="image-upload">RGB Image:</label>
+                    <input type="file" id="image-upload" name="image" accept="image/*" required>
+                </div>
+                <div class="form-group">
+                    <label for="ground-truth-upload">Ground Truth Depth Map:</label>
+                    <input type="file" id="ground-truth-upload" name="ground_truth" accept="image/*" required>
+                    <small>Must be a depth image in PNG format (16-bit for best results)</small>
+                </div>
+                <div class="form-group">
+                    <label>Evaluation Mode:</label>
+                    <select id="eval-mode" name="eval_mode">
+                        <option value="mono">Mono (scale-invariant)</option>
+                        <option value="stereo">Stereo (fixed scale)</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Metrics:</label>
+                    <div class="checkbox-group">
+                        <label><input type="checkbox" name="metrics" value="eigen" checked> Eigen Metrics</label>
+                        <label><input type="checkbox" name="metrics" value="benchmark" checked> Benchmark Metrics</label>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <button type="submit" id="evaluate-btn">Evaluate All Models</button>
+                </div>
+            </form>
+        </section>
+
+        <section id="loading" class="hidden">
+            <div class="loader"></div>
+            <p>Evaluating models... This may take a minute.</p>
+        </section>
+
+        <section id="results" class="hidden">
+            <h2>Evaluation Results</h2>
+            <div class="images-container">
+                <div class="image-card">
+                    <h3>Original Image</h3>
+                    <img id="original-image" src="" alt="Original Image">
+                </div>
+                <div class="image-card">
+                    <h3>Ground Truth</h3>
+                    <img id="ground-truth-image" src="" alt="Ground Truth Depth Map">
+                </div>
+            </div>
+
+            <h3>Model Performance</h3>
+            <div id="metrics-table-container">
+                <table id="metrics-table">
+                    <thead>
+                        <tr>
+                            <th>Model</th>
+                            <th>Depth Map</th>
+                            <th>Inference Time</th>
+                            <th>AbsRel ↓</th>
+                            <th>SqRel ↓</th>
+                            <th>RMSE ↓</th>
+                            <th>LogRMSE ↓</th>
+                            <th>δ &lt; 1.25 ↑</th>
+                            <th>δ &lt; 1.25² ↑</th>
+                            <th>δ &lt; 1.25³ ↑</th>
+                        </tr>
+                    </thead>
+                    <tbody id="metrics-results">
+                        <!-- Results will be populated here -->
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/evaluate.js') }}"></script>
+</body>
+</html>

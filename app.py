@@ -2,6 +2,8 @@ import os
 import io
 import base64
 import numpy as np
+import json
+from collections import defaultdict
 
 # Try to import cv2, but fall back to PIL if necessary
 try:
@@ -19,6 +21,7 @@ matplotlib.use('Agg')  # Use non-interactive backend
 
 import time
 import torch
+import torch.nn.functional as F
 
 # Import your models, model dictionary, and the predict_depth function
 from models import MODELS, predict_depth
@@ -27,13 +30,16 @@ from pathlib import Path
 
 app = Flask(__name__)
 
-# Configure upload folder
+# Configure folders
 UPLOAD_FOLDER = os.path.join('static', 'uploads')
 RESULT_FOLDER = os.path.join('static', 'results')
+GROUND_TRUTH_FOLDER = os.path.join('static', 'ground_truth')
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(RESULT_FOLDER, exist_ok=True)
+os.makedirs(GROUND_TRUTH_FOLDER, exist_ok=True)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['RESULT_FOLDER'] = RESULT_FOLDER
+app.config['GROUND_TRUTH_FOLDER'] = GROUND_TRUTH_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max upload
 
 
@@ -273,6 +279,312 @@ def download_models_page():
     Simple route to instruct the user on downloading models if they are missing.
     """
     return render_template('download.html')
+
+
+# -------------------------------
+# Ground Truth Evaluation Functions
+# -------------------------------
+def load_ground_truth(ground_truth_path):
+    """
+    Load ground truth depth map from an image file.
+    
+    Args:
+        ground_truth_path (str): Path to the ground truth depth map image.
+        
+    Returns:
+        numpy.ndarray: A depth map array with depth values.
+    """
+    # Check if the file exists
+    if not os.path.exists(ground_truth_path):
+        raise FileNotFoundError(f"Ground truth file not found: {ground_truth_path}")
+    
+    # Try to load the ground truth depth map
+    try:
+        if CV2_AVAILABLE:
+            # OpenCV can load 16-bit depth maps properly
+            depth_img = cv2.imread(ground_truth_path, cv2.IMREAD_ANYDEPTH)
+            if depth_img is None:
+                # Fallback to 8-bit if 16-bit fails
+                depth_img = cv2.imread(ground_truth_path, cv2.IMREAD_GRAYSCALE)
+        else:
+            # PIL can handle various formats
+            pil_img = Image.open(ground_truth_path)
+            depth_img = np.array(pil_img)
+            
+        # Normalize depth if needed
+        if depth_img.dtype == np.uint16:
+            # 16-bit depth map, normalize to 0-1 range
+            depth_img = depth_img.astype(np.float32) / 65535.0
+        elif depth_img.dtype == np.uint8:
+            # 8-bit depth map, normalize to 0-1 range
+            depth_img = depth_img.astype(np.float32) / 255.0
+        
+        return depth_img
+    except Exception as e:
+        raise ValueError(f"Error loading ground truth depth map: {str(e)}")
+
+
+def create_depth_colormap(depth_map):
+    """
+    Create a colorized visualization of a depth map.
+    
+    Args:
+        depth_map (numpy.ndarray): The depth map to visualize.
+        
+    Returns:
+        PIL.Image: A colorized visualization of the depth map.
+    """
+    # Normalize depth to 0-1 range for visualization
+    if depth_map.min() != depth_map.max():
+        normalized_depth = (depth_map - depth_map.min()) / (depth_map.max() - depth_map.min())
+    else:
+        normalized_depth = depth_map
+    
+    # Apply colormap
+    colored_depth = plt.cm.viridis(normalized_depth)[:, :, :3]  # shape: (H, W, 3)
+    colored_depth = (colored_depth * 255).astype(np.uint8)
+    
+    # Convert to PIL image
+    return Image.fromarray(colored_depth)
+
+
+def metrics_eigen(pred, target, mask=None):
+    """
+    Compute Eigen depth evaluation metrics.
+    From: Depth Map Prediction from a Single Image using a Multi-Scale Deep Network (Eigen et al., 2014)
+    
+    Args:
+        pred (numpy.ndarray): Predicted depth map.
+        target (numpy.ndarray): Ground truth depth map.
+        mask (numpy.ndarray, optional): Mask of valid pixels. If None, all pixels are used.
+        
+    Returns:
+        dict: Dictionary of metrics.
+    """
+    if mask is None:
+        # Use all pixels by default
+        mask = np.ones_like(pred, dtype=bool)
+    
+    # Apply mask and flatten arrays
+    pred = pred[mask]
+    target = target[mask]
+    
+    # Ensure pred and target have values
+    if len(pred) == 0 or len(target) == 0:
+        return {
+            'AbsRel': float('nan'),
+            'SqRel': float('nan'),
+            'RMSE': float('nan'),
+            'LogRMSE': float('nan'),
+            'delta1': float('nan'),
+            'delta2': float('nan'),
+            'delta3': float('nan'),
+        }
+    
+    # Calculate metrics
+    thresh = np.maximum((target / pred), (pred / target))
+    
+    abs_rel = np.mean(np.abs(pred - target) / target)
+    sq_rel = np.mean(((pred - target) ** 2) / target)
+    rmse = np.sqrt(np.mean((pred - target) ** 2))
+    log_rmse = np.sqrt(np.mean((np.log(pred) - np.log(target)) ** 2))
+    
+    a1 = np.mean(thresh < 1.25)
+    a2 = np.mean(thresh < 1.25 ** 2)
+    a3 = np.mean(thresh < 1.25 ** 3)
+    
+    return {
+        'AbsRel': float(abs_rel),
+        'SqRel': float(sq_rel),
+        'RMSE': float(rmse),
+        'LogRMSE': float(log_rmse),
+        'delta1': float(a1),
+        'delta2': float(a2),
+        'delta3': float(a3),
+    }
+
+
+def align_depths(pred, target, mask=None):
+    """
+    Align predicted depth to ground truth using least squares.
+    This function scales and shifts the predicted depth map to match the ground truth.
+    
+    Args:
+        pred (numpy.ndarray): Predicted depth map.
+        target (numpy.ndarray): Ground truth depth map.
+        mask (numpy.ndarray, optional): Mask of valid pixels. If None, all pixels are used.
+        
+    Returns:
+        numpy.ndarray: Aligned predicted depth map.
+    """
+    if mask is None:
+        # Use all pixels by default
+        mask = np.ones_like(pred, dtype=bool)
+    
+    # Apply mask and reshape for linear regression
+    pred_masked = pred[mask].reshape(-1, 1)
+    target_masked = target[mask].reshape(-1, 1)
+    
+    # Add a column of ones for the bias term
+    A = np.concatenate([pred_masked, np.ones_like(pred_masked)], axis=1)
+    
+    # Solve the least squares problem
+    x, _, _, _ = np.linalg.lstsq(A, target_masked, rcond=None)
+    
+    # Extract scale and shift
+    scale, shift = x.flatten()
+    
+    # Apply scale and shift to prediction
+    aligned_pred = scale * pred + shift
+    
+    return aligned_pred
+
+
+def evaluate_depth_prediction(pred_depth, gt_depth, eval_mode='mono'):
+    """
+    Evaluate a depth prediction against ground truth.
+    
+    Args:
+        pred_depth (numpy.ndarray): Predicted depth map.
+        gt_depth (numpy.ndarray): Ground truth depth map.
+        eval_mode (str): Evaluation mode ('mono' or 'stereo').
+            - 'mono': Scale-invariant evaluation (align pred to gt).
+            - 'stereo': Fixed-scale evaluation.
+            
+    Returns:
+        dict: Dictionary of metrics.
+    """
+    # Ensure same shape
+    if pred_depth.shape != gt_depth.shape:
+        # Resize prediction to match ground truth
+        if torch.is_tensor(pred_depth):
+            pred_depth = pred_depth.cpu().numpy()
+        
+        h, w = gt_depth.shape
+        if CV2_AVAILABLE:
+            pred_depth = cv2.resize(pred_depth, (w, h), interpolation=cv2.INTER_LINEAR)
+        else:
+            # Use PIL
+            pred_depth_pil = Image.fromarray(pred_depth)
+            pred_depth_pil = pred_depth_pil.resize((w, h), Image.BILINEAR)
+            pred_depth = np.array(pred_depth_pil)
+    
+    # Create mask for valid pixels (non-zero in ground truth)
+    mask = gt_depth > 0
+    
+    # Skip if no valid pixels
+    if not np.any(mask):
+        return None
+    
+    # Align depths if using mono (scale-invariant) evaluation
+    if eval_mode == 'mono':
+        pred_depth = align_depths(pred_depth, gt_depth, mask)
+    
+    # Compute metrics
+    metrics = metrics_eigen(pred_depth, gt_depth, mask)
+    
+    return metrics
+
+
+@app.route('/evaluate', methods=['GET'])
+def evaluate_page():
+    """
+    Render the ground truth evaluation page.
+    """
+    return render_template('evaluate.html')
+
+
+@app.route('/evaluate-ground-truth', methods=['POST'])
+def evaluate_ground_truth():
+    """
+    Handle ground truth evaluation request.
+    Expects form data with 'image' and 'ground_truth' files.
+    """
+    if 'image' not in request.files or 'ground_truth' not in request.files:
+        return jsonify({'error': 'Missing image or ground truth file'})
+    
+    # Get uploaded files
+    image_file = request.files['image']
+    gt_file = request.files['ground_truth']
+    
+    # Get evaluation mode and metrics
+    eval_mode = request.form.get('eval_mode', 'mono')
+    selected_metrics = request.form.getlist('metrics[]')
+    
+    if image_file.filename == '' or gt_file.filename == '':
+        return jsonify({'error': 'No selected files'})
+    
+    try:
+        # Save uploaded files
+        image_path = os.path.join(app.config['UPLOAD_FOLDER'], 'eval_input.jpg')
+        gt_path = os.path.join(app.config['GROUND_TRUTH_FOLDER'], 'ground_truth.png')
+        
+        image_file.save(image_path)
+        gt_file.save(gt_path)
+        
+        # Load ground truth depth map
+        gt_depth = load_ground_truth(gt_path)
+        
+        # Create visualization for ground truth
+        gt_viz = create_depth_colormap(gt_depth)
+        gt_viz_path = os.path.join(app.config['GROUND_TRUTH_FOLDER'], 'ground_truth_viz.jpg')
+        gt_viz.save(gt_viz_path)
+        
+        # Process with all models
+        results = []
+        
+        for model_id in MODELS:
+            try:
+                # Estimate depth
+                comparison_img, depth_img, inference_time, depth_min, depth_max = estimate_depth(
+                    image_path, model_id
+                )
+                
+                # Save results
+                depth_output_path = os.path.join(app.config['RESULT_FOLDER'], f'depth_{model_id}.jpg')
+                depth_img.save(depth_output_path)
+                
+                # Get depth map as numpy array for evaluation
+                if CV2_AVAILABLE:
+                    img = cv2.imread(image_path)
+                    rgb_img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                else:
+                    rgb_img = np.array(Image.open(image_path).convert('RGB'))
+                
+                # Get model prediction as raw depth map
+                pred_depth = predict_depth(rgb_img, model_id)
+                
+                # Compute metrics
+                metrics = evaluate_depth_prediction(pred_depth, gt_depth, eval_mode)
+                
+                results.append({
+                    'model_id': model_id,
+                    'model_name': MODELS[model_id]['name'],
+                    'inference_time': f"{inference_time:.2f}",
+                    'depth_map': os.path.join('static', 'results', f'depth_{model_id}.jpg'),
+                    'depth_min': f"{depth_min:.2f}",
+                    'depth_max': f"{depth_max:.2f}",
+                    'metrics': metrics
+                })
+            except Exception as e:
+                print(f"Error evaluating model {model_id}: {str(e)}")
+                results.append({
+                    'model_id': model_id,
+                    'model_name': MODELS[model_id]['name'],
+                    'error': str(e)
+                })
+        
+        # Return results
+        return jsonify({
+            'success': True,
+            'original': os.path.join('static', 'uploads', 'eval_input.jpg'),
+            'ground_truth_viz': os.path.join('static', 'ground_truth', 'ground_truth_viz.jpg'),
+            'results': results
+        })
+        
+    except Exception as e:
+        print(f"Error in ground truth evaluation: {str(e)}")
+        return jsonify({'error': str(e)})
 
 
 # -------------------------------
