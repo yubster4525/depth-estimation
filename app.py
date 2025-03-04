@@ -173,11 +173,10 @@ def index():
             'description': model_info['description']
         }
 
-    # Add current year for the footer
+    # Set context for template
     context = {
         'models': template_models,
-        'active_page': 'home',
-        'now': datetime.now
+        'active_page': 'home'
     }
     
     return render_template('index.html', **context)
@@ -238,8 +237,7 @@ def results_page():
     
     context = {
         'folders': folders,
-        'active_page': 'results',
-        'now': datetime.now
+        'active_page': 'results'
     }
     
     return render_template('results.html', **context)
@@ -310,7 +308,13 @@ def dataset_page():
                     'has_splits': has_splits
                 })
 
-    return render_template('dataset.html', models=template_models, available_datasets=available_datasets)
+    context = {
+        'models': template_models, 
+        'available_datasets': available_datasets,
+        'active_page': 'dataset'
+    }
+
+    return render_template('dataset.html', **context)
 
 
 @app.route('/training')
@@ -368,7 +372,13 @@ def training_page():
                 
                 custom_models.append(model_info)
     
-    return render_template('training.html', datasets=datasets, custom_models=custom_models)
+    context = {
+        'datasets': datasets,
+        'custom_models': custom_models,
+        'active_page': 'training'
+    }
+    
+    return render_template('training.html', **context)
 
 
 @app.route('/static/<path:filename>')
@@ -689,7 +699,7 @@ def evaluate_page():
     """
     Render the ground truth evaluation page.
     """
-    return render_template('evaluate.html')
+    return render_template('evaluate.html', active_page='evaluate')
 
 
 @app.route('/evaluate-ground-truth', methods=['POST'])

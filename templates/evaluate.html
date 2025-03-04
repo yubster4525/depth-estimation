@@ -1,21 +1,12 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Ground Truth Evaluation - Monocular Depth Estimation</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
-</head>
-<body>
-    <div class="container">
-        <header>
-            <h1>Ground Truth Evaluation</h1>
-            <p>Upload an image and its corresponding ground truth depth map to evaluate model performance</p>
-        </header>
+{% extends "layout.html" %}
 
-        <nav>
-            <a href="/" class="nav-link">Back to Demo</a>
-        </nav>
+{% block title %}Ground Truth Evaluation - Monocular Depth Estimation{% endblock %}
+
+{% block content %}
+    <header class="text-center mb-4">
+        <h1>Ground Truth Evaluation</h1>
+        <p class="lead">Upload an image and its corresponding ground truth depth map to evaluate model performance</p>
+    </header>
 
         <section class="upload-section">
             <form id="evaluation-form" enctype="multipart/form-data" method="post" action="/evaluate-ground-truth">
@@ -91,6 +82,8 @@
         </section>
     </div>
 
+{% endblock %}
+
+{% block scripts %}
     <script src="{{ url_for('static', filename='js/evaluate.js') }}"></script>
-</body>
-</html>
+{% endblock %}
