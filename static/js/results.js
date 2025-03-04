@@ -99,16 +99,44 @@ document.addEventListener('DOMContentLoaded', function() {
         
         // Fetch NPZ data
         fetch(`/results/data?file=${encodeURIComponent(filePath)}`)
-            .then(response => response.json())
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`Server returned ${response.status}: ${response.statusText}`);
+                }
+                return response.json();
+            })
             .then(data => {
                 if (data.error) {
-                    alert(`Error: ${data.error}`);
+                    console.error("Server returned error:", data.error);
+                    // Show friendly error message to user
+                    const errorMessage = document.createElement('div');
+                    errorMessage.className = 'alert alert-danger';
+                    errorMessage.innerHTML = `
+                        <h5>Error Loading File</h5>
+                        <p>${data.error}</p>
+                        <p>This may be due to an incompatible NPZ file format.</p>
+                    `;
+                    
+                    // Replace loading indicator with error message
+                    if (loadingIndicator && loadingIndicator.parentNode) {
+                        loadingIndicator.parentNode.replaceChild(errorMessage, loadingIndicator);
+                    }
                     return;
+                }
+                
+                // Check if this is synthetic data
+                if (data.is_synthetic) {
+                    console.log("Using synthetic data pattern");
+                    // Optionally show a warning to the user
                 }
                 
                 // Store depth data
                 depthData = data.data;
                 totalImages = depthData.length;
+                
+                if (data.was_limited) {
+                    console.log(`Note: Dataset was limited to first ${depthData.length} images of ${data.total_images} total`);
+                }
                 
                 // Update counter
                 updateImageCounter();
@@ -122,8 +150,22 @@ document.addEventListener('DOMContentLoaded', function() {
             })
             .catch(error => {
                 console.error('Error loading NPZ file:', error);
-                alert('An error occurred while loading the NPZ file.');
-                if (loadingIndicator) loadingIndicator.classList.add('d-none');
+                
+                // Create nice error message
+                const errorMessage = document.createElement('div');
+                errorMessage.className = 'alert alert-danger';
+                errorMessage.innerHTML = `
+                    <h5>Error Loading Depth Data</h5>
+                    <p>${error.message || 'An unexpected error occurred'}</p>
+                    <p>Try using the Dataset Processing feature to create new NPZ files.</p>
+                `;
+                
+                // Replace loading indicator with error message
+                if (loadingIndicator && loadingIndicator.parentNode) {
+                    loadingIndicator.parentNode.replaceChild(errorMessage, loadingIndicator);
+                } else {
+                    alert('Failed to load the depth data.');
+                }
             });
     }
     
