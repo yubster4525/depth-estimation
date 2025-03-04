@@ -73,7 +73,7 @@ document.addEventListener('DOMContentLoaded', function() {
         resultsSection.style.display = 'none';
         
         // Send evaluation request
-        fetch('/evaluate', {
+        fetch('/evaluate-all-models', {
             method: 'GET'
         })
         .then(response => response.json())

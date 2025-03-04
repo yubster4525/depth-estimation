@@ -1,5 +1,14 @@
 document.addEventListener('DOMContentLoaded', function() {
+    console.log('Evaluate.js loaded successfully');
+    // Check if we're on the evaluate page
+    const evaluationForm = document.getElementById('evaluation-form');
+    if (!evaluationForm) {
+        console.error('Evaluation form not found in the DOM');
+    } else {
+        console.log('Evaluation form found in DOM');
+    }
     const form = document.getElementById('evaluation-form');
+    const evaluateBtn = document.getElementById('evaluate-btn');
     const loadingSection = document.getElementById('loading');
     const resultsSection = document.getElementById('results');
     const metricsResults = document.getElementById('metrics-results');
@@ -25,6 +34,12 @@ document.addEventListener('DOMContentLoaded', function() {
             return `<span class="bad-metric">${formatted}</span>`;
         }
     }
+    
+    // Add click event listener to the evaluate button
+    evaluateBtn.addEventListener('click', function() {
+        console.log('Evaluate button clicked, triggering form submit');
+        form.dispatchEvent(new Event('submit'));
+    });
 
     form.addEventListener('submit', function(e) {
         e.preventDefault();
@@ -38,10 +53,9 @@ document.addEventListener('DOMContentLoaded', function() {
             document.querySelectorAll('input[name="metrics"]:checked')
         ).map(cb => cb.value);
         
+        // Force at least one metric even if none selected
         if (selectedMetrics.length === 0) {
-            alert('Please select at least one metric type');
-            loadingSection.classList.add('hidden');
-            return;
+            selectedMetrics.push('eigen');
         }
         
         // Create FormData object to send files
@@ -50,8 +64,10 @@ document.addEventListener('DOMContentLoaded', function() {
         formData.append('ground_truth', document.getElementById('ground-truth-upload').files[0]);
         formData.append('eval_mode', document.getElementById('eval-mode').value);
         selectedMetrics.forEach(metric => {
-            formData.append('metrics[]', metric);
+            formData.append('metrics', metric);
         });
+        
+        console.log('Submitting with metrics:', selectedMetrics);
         
         // Send evaluation request
         fetch('/evaluate-ground-truth', {
@@ -60,6 +76,8 @@ document.addEventListener('DOMContentLoaded', function() {
         })
         .then(response => response.json())
         .then(data => {
+            console.log('Response data:', data);
+            
             if (data.error) {
                 alert('Error: ' + data.error);
                 loadingSection.classList.add('hidden');

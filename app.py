@@ -173,6 +173,28 @@ def index():
     return render_template('index.html', models=template_models)
 
 
+@app.route('/dataset')
+def dataset_page():
+    """
+    Dataset evaluation page. Allows batch processing of datasets.
+    """
+    models_exist, missing_models = check_models()
+
+    if not models_exist:
+        # If any model files are missing, show the download instructions page
+        return render_template('download.html', missing_models=missing_models)
+
+    # Prepare model info for the template
+    template_models = {}
+    for model_id, model_info in MODELS.items():
+        template_models[model_id] = {
+            'name': model_info['name'],
+            'description': model_info['description']
+        }
+
+    return render_template('dataset.html', models=template_models)
+
+
 @app.route('/static/<path:filename>')
 def serve_static(filename):
     """
@@ -233,7 +255,7 @@ def process_image():
     return jsonify({'error': 'Unknown error during processing'})
 
 
-@app.route('/evaluate', methods=['GET'])
+@app.route('/evaluate-all-models', methods=['GET'])
 def evaluate_models():
     """
     Evaluate all models in MODELS dictionary using the last uploaded image.
@@ -509,7 +531,11 @@ def evaluate_ground_truth():
     
     # Get evaluation mode and metrics
     eval_mode = request.form.get('eval_mode', 'mono')
-    selected_metrics = request.form.getlist('metrics[]')
+    selected_metrics = request.form.getlist('metrics')
+    
+    # Default to Eigen metrics if none selected
+    if not selected_metrics:
+        selected_metrics = ['eigen']
     
     if image_file.filename == '' or gt_file.filename == '':
         return jsonify({'error': 'No selected files'})
@@ -524,6 +550,7 @@ def evaluate_ground_truth():
         
         # Load ground truth depth map
         gt_depth = load_ground_truth(gt_path)
+        print(f"Ground truth loaded successfully. Shape: {gt_depth.shape}, Range: [{gt_depth.min()}, {gt_depth.max()}]")
         
         # Create visualization for ground truth
         gt_viz = create_depth_colormap(gt_depth)
@@ -557,6 +584,8 @@ def evaluate_ground_truth():
                 # Compute metrics
                 metrics = evaluate_depth_prediction(pred_depth, gt_depth, eval_mode)
                 
+                print(f"Model {model_id} metrics: {metrics}")
+                
                 results.append({
                     'model_id': model_id,
                     'model_name': MODELS[model_id]['name'],
@@ -588,9 +617,342 @@ def evaluate_ground_truth():
 
 
 # -------------------------------
+# Dataset Processing Routes
+# -------------------------------
+import threading
+import queue
+import time
+import tempfile
+import shutil
+import os.path as osp
+
+# Global variables for dataset processing
+dataset_queue = queue.Queue()
+dataset_status = {
+    'status': 'idle',
+    'current': 0,
+    'total': 0,
+    'model_name': '',
+    'results': []
+}
+dataset_thread = None
+dataset_temp_dir = None
+
+def process_dataset_worker():
+    """
+    Worker thread to process datasets in the background
+    """
+    global dataset_status, dataset_temp_dir
+    
+    try:
+        # Get dataset parameters from queue
+        params = dataset_queue.get(block=False)
+        
+        dataset_status['status'] = 'processing'
+        dataset_status['current'] = 0
+        dataset_status['total'] = len(params['images']) * len(params['models'])
+        
+        results = []
+        
+        # Create output directories
+        npz_dir = osp.join(app.config['RESULT_FOLDER'], 'npz')
+        os.makedirs(npz_dir, exist_ok=True)
+        
+        if params['generate_vis']:
+            vis_dir = osp.join(app.config['RESULT_FOLDER'], 'vis_dataset')
+            os.makedirs(vis_dir, exist_ok=True)
+        
+        # Process each model
+        for model_idx, model_id in enumerate(params['models']):
+            model_name = MODELS[model_id]['name']
+            dataset_status['model_name'] = model_name
+            
+            # Process all images with this model
+            predictions = []
+            inference_times = []
+            
+            for img_idx, img_data in enumerate(params['images']):
+                img_path, img = img_data
+                
+                # Update status
+                dataset_status['current'] = model_idx * len(params['images']) + img_idx + 1
+                
+                # Process image
+                start_time = time.time()
+                depth_map = predict_depth(img, model_id)
+                inference_time = time.time() - start_time
+                inference_times.append(inference_time)
+                
+                # Store prediction
+                predictions.append(depth_map)
+                
+                # Generate visualization if requested
+                if params['generate_vis'] and img_idx < 10:  # Only first 10 for preview
+                    vis_model_dir = osp.join(vis_dir, model_id)
+                    os.makedirs(vis_model_dir, exist_ok=True)
+                    
+                    # Normalize depth for visualization
+                    depth_norm = (depth_map - depth_map.min()) / (depth_map.max() - depth_map.min() + 1e-8)
+                    colored_depth = plt.cm.viridis(depth_norm)[:, :, :3]
+                    colored_depth = (colored_depth * 255).astype(np.uint8)
+                    
+                    # Save visualization
+                    vis_path = osp.join(vis_model_dir, f"{img_idx:04d}.png")
+                    Image.fromarray(colored_depth).save(vis_path)
+            
+            # Convert predictions to numpy array
+            predictions = np.stack(predictions)
+            
+            # Save as NPZ file
+            npz_filename = f"{model_id}_raw.npz"
+            npz_path = osp.join(npz_dir, npz_filename)
+            np.savez(npz_path, pred=predictions, pred_type="depth")
+            
+            # Calculate average inference time
+            avg_inference_time = sum(inference_times) / len(inference_times)
+            
+            # Normalize predictions
+            dataset_status['status'] = 'normalizing'
+            
+            # Apply normalization
+            norm_predictions = np.zeros_like(predictions)
+            
+            if params['normalization'] == 'global':
+                # Global min-max normalization
+                min_val = np.min(predictions)
+                max_val = np.max(predictions)
+                norm_predictions = (predictions - min_val) / (max_val - min_val + 1e-8)
+            
+            elif params['normalization'] == 'per_image':
+                # Normalize each image independently
+                for i in range(predictions.shape[0]):
+                    min_val = np.min(predictions[i])
+                    max_val = np.max(predictions[i])
+                    norm_predictions[i] = (predictions[i] - min_val) / (max_val - min_val + 1e-8)
+            
+            elif params['normalization'] == 'affine_invariant':
+                # Affine-invariant normalization
+                for i in range(predictions.shape[0]):
+                    depth = predictions[i]
+                    mask_valid = depth > 0
+                    depth_valid = depth[mask_valid]
+                    
+                    if len(depth_valid) > 0:
+                        d_min = np.percentile(depth_valid, 5)
+                        d_max = np.percentile(depth_valid, 95)
+                        
+                        norm_depth = (depth - d_min) / (d_max - d_min + 1e-8)
+                        norm_depth = np.clip(norm_depth, 0, 1)
+                        norm_predictions[i] = norm_depth
+                    else:
+                        # Fallback if no valid depths
+                        min_val = np.min(depth)
+                        max_val = np.max(depth)
+                        norm_predictions[i] = (depth - min_val) / (max_val - min_val + 1e-8)
+            
+            # Save normalized predictions
+            norm_npz_filename = f"{model_id}_{params['normalization']}.npz"
+            norm_npz_path = osp.join(npz_dir, norm_npz_filename)
+            np.savez(norm_npz_path, pred=norm_predictions, normalization=params['normalization'])
+            
+            # Add to results
+            results.append({
+                'id': model_id,
+                'name': model_name,
+                'avg_time': f"{avg_inference_time:.3f}",
+                'npz_path': f"/static/results/npz/{norm_npz_filename}",
+                'raw_npz_path': f"/static/results/npz/{npz_filename}"
+            })
+        
+        # Prepare preview images
+        preview_images = []
+        if params['generate_vis']:
+            for i in range(min(5, len(params['images']))):  # Show up to 5 preview images
+                preview = {
+                    'name': f"Sample {i+1}",
+                    'original': f"/static/results/vis_dataset/sample_{i}.jpg",
+                    'depth': f"/static/results/vis_dataset/{params['models'][0]}/{i:04d}.png"
+                }
+                
+                # Save original image
+                img_path, img = params['images'][i]
+                img_pil = Image.fromarray(img)
+                img_pil.save(osp.join(app.config['RESULT_FOLDER'], f"vis_dataset/sample_{i}.jpg"))
+                
+                preview_images.append(preview)
+        
+        # Mark processing as complete
+        dataset_status['status'] = 'complete'
+        dataset_status['results'] = results
+        dataset_status['preview_images'] = preview_images
+        
+        # Clean up temp directory
+        if dataset_temp_dir and osp.exists(dataset_temp_dir):
+            shutil.rmtree(dataset_temp_dir)
+            dataset_temp_dir = None
+        
+    except queue.Empty:
+        # No dataset to process
+        pass
+    except Exception as e:
+        # Handle errors
+        dataset_status['status'] = 'error'
+        dataset_status['message'] = str(e)
+        print(f"Error processing dataset: {str(e)}")
+        
+        # Clean up temp directory
+        if dataset_temp_dir and osp.exists(dataset_temp_dir):
+            shutil.rmtree(dataset_temp_dir)
+            dataset_temp_dir = None
+
+
+@app.route('/process-dataset/start')
+def process_dataset_start():
+    """
+    Start Server-Sent Events connection for dataset processing
+    """
+    def event_stream():
+        # Send initial status
+        yield f"data: {json.dumps({'status': 'init_complete'})}\n\n"
+        
+        # Report status updates
+        last_status = None
+        while True:
+            if dataset_status != last_status:
+                yield f"data: {json.dumps(dataset_status)}\n\n"
+                last_status = dataset_status.copy()
+            
+            time.sleep(0.5)
+    
+    return Response(event_stream(), mimetype="text/event-stream")
+
+
+@app.route('/process-dataset/upload', methods=['POST'])
+def process_dataset_upload():
+    """
+    Upload dataset for processing
+    """
+    global dataset_temp_dir
+    
+    try:
+        # Create a temporary directory for the dataset
+        dataset_temp_dir = tempfile.mkdtemp()
+        
+        dataset_type = request.form.get('dataset_type')
+        selected_models = request.form.getlist('models[]')
+        normalization = request.form.get('normalization', 'affine_invariant')
+        generate_vis = request.form.get('generate_vis') == 'true'
+        
+        # Validate models
+        if not selected_models:
+            return jsonify({'error': 'No models selected'})
+        
+        valid_models = [m for m in selected_models if m in MODELS]
+        if not valid_models:
+            return jsonify({'error': 'No valid models selected'})
+        
+        # Handle SYNS dataset
+        if dataset_type == 'syns':
+            if 'syns_zip' not in request.files:
+                return jsonify({'error': 'No SYNS zip file uploaded'})
+            
+            syns_zip = request.files['syns_zip']
+            syns_split = request.form.get('syns_split', 'val')
+            
+            # Save the zip file
+            zip_path = osp.join(dataset_temp_dir, 'syns_patches.zip')
+            syns_zip.save(zip_path)
+            
+            # Initialize SYNS accessor
+            from io import BytesIO
+            import zipfile
+            
+            # Load images from the zip
+            images = []
+            with zipfile.ZipFile(zip_path, 'r') as zip_file:
+                # Load split files
+                split_files_path = f"syns_patches/splits/{syns_split}_files.txt"
+                if split_files_path not in zip_file.namelist():
+                    return jsonify({'error': f"Split file '{split_files_path}' not found in zip"})
+                
+                split_files_content = zip_file.read(split_files_path).decode("utf-8")
+                split_files = split_files_content.splitlines()
+                
+                # Load images
+                for line in split_files:
+                    folder_name, image_name = line.split()
+                    image_path = f"syns_patches/{folder_name}/images/{image_name}"
+                    
+                    if image_path not in zip_file.namelist():
+                        return jsonify({'error': f"Image '{image_path}' not found in zip"})
+                    
+                    image_data = zip_file.read(image_path)
+                    image = Image.open(BytesIO(image_data)).convert('RGB')
+                    images.append((image_path, np.array(image)))
+        
+        # Handle custom image folder
+        else:
+            if 'custom_images[]' not in request.files:
+                return jsonify({'error': 'No custom images uploaded'})
+            
+            custom_images = request.files.getlist('custom_images[]')
+            
+            # Filter for image files
+            image_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff'}
+            valid_images = [img for img in custom_images if 
+                           osp.splitext(img.filename.lower())[1] in image_extensions]
+            
+            if not valid_images:
+                return jsonify({'error': 'No valid image files found'})
+            
+            # Load images
+            images = []
+            for img_file in valid_images:
+                try:
+                    img = Image.open(img_file).convert('RGB')
+                    images.append((img_file.filename, np.array(img)))
+                except Exception as e:
+                    print(f"Error loading image {img_file.filename}: {str(e)}")
+        
+        # Queue the dataset for processing
+        dataset_queue.put({
+            'images': images,
+            'models': valid_models,
+            'normalization': normalization,
+            'generate_vis': generate_vis
+        })
+        
+        # Start the processing thread if not already running
+        global dataset_thread
+        if dataset_thread is None or not dataset_thread.is_alive():
+            dataset_thread = threading.Thread(target=process_dataset_worker)
+            dataset_thread.daemon = True
+            dataset_thread.start()
+        
+        return jsonify({'success': True, 'image_count': len(images)})
+        
+    except Exception as e:
+        # Clean up temp directory
+        if dataset_temp_dir and osp.exists(dataset_temp_dir):
+            shutil.rmtree(dataset_temp_dir)
+            dataset_temp_dir = None
+        
+        return jsonify({'error': str(e)})
+
+
+@app.route('/process-dataset/process', methods=['POST'])
+def process_dataset_process():
+    """
+    Process the uploaded dataset
+    """
+    # This just triggers the worker thread to continue
+    return jsonify({'success': True})
+
+
+# -------------------------------
 # Run the Flask app
 # -------------------------------
 if __name__ == '__main__':
-    port = 8084  # Changed from 8083 to avoid conflicts
+    port = 8085  # Changed to avoid conflicts
     print(f"Starting server on http://127.0.0.1:{port}")
     app.run(host='127.0.0.1', port=port, debug=True, threaded=True)

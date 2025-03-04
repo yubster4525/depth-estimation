@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dataset Evaluation - Monocular Depth Estimation</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.0/dist/css/bootstrap.min.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div class="container my-5">
+        <header class="text-center mb-5">
+            <h1>Dataset Evaluation</h1>
+            <p class="lead">Generate depth predictions for entire datasets and create submission files</p>
+            <div class="mt-3">
+                <a href="/" class="btn btn-outline-primary">Back to Demo</a>
+                <a href="/evaluate" class="btn btn-outline-info">Ground Truth Evaluation</a>
+            </div>
+        </header>
+
+        <div class="row">
+            <div class="col-md-6 mb-4">
+                <div class="card shadow-sm">
+                    <div class="card-header bg-primary text-white">
+                        <h3 class="card-title h5 mb-0">Dataset Selection</h3>
+                    </div>
+                    <div class="card-body">
+                        <form id="dataset-form">
+                            <div class="mb-3">
+                                <label class="form-label">Dataset Type:</label>
+                                <select id="dataset-type" class="form-select">
+                                    <option value="syns">SYNS-Patches</option>
+                                    <option value="custom">Custom Image Folder</option>
+                                </select>
+                            </div>
+                            
+                            <div id="syns-options" class="mb-3">
+                                <label class="form-label">SYNS Dataset Split:</label>
+                                <select id="syns-split" class="form-select">
+                                    <option value="val">Validation</option>
+                                    <option value="test">Test</option>
+                                </select>
+                                
+                                <div class="mt-3">
+                                    <label for="syns-zip" class="form-label">SYNS-Patches Zip File:</label>
+                                    <input type="file" class="form-control" id="syns-zip" accept=".zip">
+                                </div>
+                            </div>
+                            
+                            <div id="custom-options" class="mb-3 d-none">
+                                <label for="custom-folder" class="form-label">Image Folder:</label>
+                                <input type="file" class="form-control" id="custom-folder" webkitdirectory directory multiple>
+                            </div>
+                            
+                            <div class="mb-3">
+                                <label class="form-label">Select Models:</label>
+                                <div class="d-flex flex-wrap gap-2">
+                                    {% for model_id, model in models.items() %}
+                                    <div class="form-check">
+                                        <input class="form-check-input model-checkbox" type="checkbox" id="model-{{ model_id }}" 
+                                            value="{{ model_id }}" checked>
+                                        <label class="form-check-label" for="model-{{ model_id }}">
+                                            {{ model.name }}
+                                            <span class="text-muted small d-block">{{ model.description }}</span>
+                                        </label>
+                                    </div>
+                                    {% endfor %}
+                                </div>
+                            </div>
+                            
+                            <div class="mb-3">
+                                <label class="form-label">Normalization Method:</label>
+                                <select id="normalization" class="form-select">
+                                    <option value="affine_invariant">Affine Invariant (recommended)</option>
+                                    <option value="global">Global Min-Max</option>
+                                    <option value="per_image">Per-Image</option>
+                                </select>
+                                <small class="text-muted">Affine invariant uses 5% and 95% percentiles to normalize depth robustly</small>
+                            </div>
+                            
+                            <div class="mb-3 form-check">
+                                <input type="checkbox" class="form-check-input" id="generate-vis" checked>
+                                <label class="form-check-label" for="generate-vis">Generate Visualizations</label>
+                            </div>
+                            
+                            <div class="d-grid">
+                                <button type="button" id="process-btn" class="btn btn-primary">Generate Predictions</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="col-md-6 mb-4">
+                <div class="card shadow-sm">
+                    <div class="card-header bg-success text-white">
+                        <h3 class="card-title h5 mb-0">Processing Status</h3>
+                    </div>
+                    <div class="card-body">
+                        <div id="status-container" class="p-3">
+                            <p class="text-muted mb-0">Configure dataset options and click "Generate Predictions"</p>
+                        </div>
+                        
+                        <div id="progress-container" class="mt-3 d-none">
+                            <label id="progress-label" class="form-label">Processing images:</label>
+                            <div class="progress">
+                                <div id="progress-bar" class="progress-bar progress-bar-striped progress-bar-animated" 
+                                     role="progressbar" style="width: 0%"></div>
+                            </div>
+                            <small id="progress-text" class="text-muted">0%</small>
+                        </div>
+                    </div>
+                </div>
+                
+                <div id="results-card" class="card shadow-sm mt-4 d-none">
+                    <div class="card-header bg-info text-white">
+                        <h3 class="card-title h5 mb-0">Results</h3>
+                    </div>
+                    <div class="card-body">
+                        <div id="results-container">
+                            <!-- Results will be inserted here -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div id="preview-section" class="my-4 d-none">
+            <h2 class="h3 mb-4">Prediction Samples</h2>
+            <div class="row" id="preview-container">
+                <!-- Preview images will be inserted here -->
+            </div>
+        </div>
+    </div>
+    
+    <!-- Loading overlay -->
+    <div id="loading-overlay" style="display: none;">
+        <div class="spinner-container">
+            <div class="spinner-border text-light" role="status">
+                <span class="visually-hidden">Loading...</span>
+            </div>
+            <p id="loading-text" class="text-light mt-2">Processing dataset...</p>
+        </div>
+    </div>
+    
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="{{ url_for('static', filename='js/dataset.js') }}"></script>
+</body>
+</html>

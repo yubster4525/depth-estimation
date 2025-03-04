@@ -18,7 +18,7 @@
         </nav>
 
         <section class="upload-section">
-            <form id="evaluation-form" enctype="multipart/form-data">
+            <form id="evaluation-form" enctype="multipart/form-data" method="post" action="/evaluate-ground-truth">
                 <div class="form-group">
                     <label for="image-upload">RGB Image:</label>
                     <input type="file" id="image-upload" name="image" accept="image/*" required>
@@ -43,7 +43,7 @@
                     </div>
                 </div>
                 <div class="form-group">
-                    <button type="submit" id="evaluate-btn">Evaluate All Models</button>
+                    <button type="button" id="evaluate-btn">Run Ground Truth Evaluation</button>
                 </div>
             </form>
         </section>
