@@ -1,0 +1,162 @@
+{% extends "layout.html" %}
+
+{% block title %}Results Viewer - Monocular Depth Estimation{% endblock %}
+
+{% block content %}
+    <header class="text-center mb-4">
+        <h1>Results Viewer</h1>
+        <p class="lead">Visualize and manage NPZ prediction results</p>
+    </header>
+
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="card shadow-sm">
+                <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
+                    <h3 class="card-title h5 mb-0">Available Result Folders</h3>
+                    <span id="storage-usage" class="badge bg-light text-dark">...</span>
+                </div>
+                <div class="card-body">
+                    {% if folders|length == 0 %}
+                    <div class="text-center p-4 text-muted">
+                        <p>No result folders found. Process a dataset to generate results.</p>
+                    </div>
+                    {% else %}
+                    <div class="row row-cols-1 row-cols-md-3 g-4" id="folders-container">
+                        {% for folder in folders %}
+                        <div class="col">
+                            <div class="card h-100 folder-card">
+                                <div class="card-header d-flex justify-content-between align-items-center">
+                                    <h5 class="card-title h6 mb-0">{{ folder.name }}</h5>
+                                    <button class="btn btn-sm btn-danger delete-folder" data-folder="{{ folder.path }}" 
+                                           data-bs-toggle="modal" data-bs-target="#deleteModal">Delete</button>
+                                </div>
+                                <div class="card-body">
+                                    <p class="card-text">
+                                        <small class="text-muted">Created: {{ folder.created }}</small><br>
+                                        <small class="text-muted">Files: {{ folder.file_count }}</small><br>
+                                        <small class="text-muted">Size: {{ folder.size }}</small>
+                                    </p>
+                                    <div class="d-grid">
+                                        <a href="/results/view/{{ folder.name }}" class="btn btn-primary">View Results</a>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+
+        {% if selected_folder %}
+        <div class="row">
+            <div class="col-md-4 mb-4">
+                <div class="card shadow-sm h-100">
+                    <div class="card-header bg-info text-white">
+                        <h3 class="card-title h5 mb-0">NPZ Files in {{ selected_folder.name }}</h3>
+                    </div>
+                    <div class="card-body p-0 thumbnail-container" id="thumbnails-container">
+                        <div class="list-group list-group-flush">
+                        {% for file in npz_files %}
+                            <a href="#" class="list-group-item list-group-item-action npz-selector {% if loop.first %}active{% endif %}" 
+                               data-file="{{ file.path }}">
+                                <div class="d-flex w-100 justify-content-between">
+                                    <h6 class="mb-1">{{ file.name }}</h6>
+                                    <small>{{ file.size }}</small>
+                                </div>
+                                <small class="d-block">Model: {{ file.model }}</small>
+                                <small class="d-block">Normalization: {{ file.normalization }}</small>
+                                <small class="d-block">Images: {{ file.image_count }}</small>
+                            </a>
+                        {% endfor %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="col-md-8 mb-4">
+                <div class="card shadow-sm">
+                    <div class="card-header bg-success text-white">
+                        <h3 class="card-title h5 mb-0">Depth Map Viewer</h3>
+                    </div>
+                    <div class="card-body">
+                        <div class="row">
+                            <div class="col-12 mb-3 viz-controls">
+                                <div class="d-flex justify-content-between align-items-center">
+                                    <div>
+                                        <select id="colormap-select" class="form-select colormap-selector">
+                                            <option value="viridis">Viridis</option>
+                                            <option value="magma">Magma</option>
+                                            <option value="inferno">Inferno</option>
+                                            <option value="plasma">Plasma</option>
+                                            <option value="turbo">Turbo</option>
+                                            <option value="jet">Jet</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <span id="image-counter">Image 1 of X</span>
+                                    </div>
+                                    <div>
+                                        <button id="btn-first" class="btn btn-sm btn-outline-primary">
+                                            <span>⏮️</span>
+                                        </button>
+                                        <button id="btn-prev" class="btn btn-sm btn-outline-primary">
+                                            <span>◀️</span>
+                                        </button>
+                                        <button id="btn-next" class="btn btn-sm btn-outline-primary">
+                                            <span>▶️</span>
+                                        </button>
+                                        <button id="btn-last" class="btn btn-sm btn-outline-primary">
+                                            <span>⏭️</span>
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div class="col-12">
+                                <div class="viewer-container">
+                                    <canvas id="depthViewer" width="640" height="480" class="w-100"></canvas>
+                                    <div id="loading-indicator" class="text-center p-5 d-none">
+                                        <div class="spinner-border text-primary" role="status">
+                                            <span class="visually-hidden">Loading...</span>
+                                        </div>
+                                        <p class="mt-3">Loading depth data...</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+{% endblock %}
+
+{% block modals %}
+<!-- Delete confirmation modal -->
+<div class="modal fade" id="deleteModal" tabindex="-1" aria-labelledby="deleteModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="deleteModalLabel">Confirm Deletion</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <p>Are you sure you want to delete this folder and all its contents?</p>
+                <p class="text-danger"><strong>This action cannot be undone.</strong></p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-danger" id="confirm-delete">Delete</button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/results.js') }}"></script>
+{% endblock %}

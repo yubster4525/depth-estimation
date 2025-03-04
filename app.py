@@ -157,6 +157,8 @@ def index():
     Main page. Checks if models are present; if not, shows the download page.
     Otherwise, renders index.html with the available models.
     """
+    from datetime import datetime
+    
     models_exist, missing_models = check_models()
 
     if not models_exist:
@@ -171,7 +173,76 @@ def index():
             'description': model_info['description']
         }
 
-    return render_template('index.html', models=template_models)
+    # Add current year for the footer
+    context = {
+        'models': template_models,
+        'active_page': 'home',
+        'now': datetime.now
+    }
+    
+    return render_template('index.html', **context)
+
+@app.route('/results')
+def results_page():
+    """
+    Results page. Shows NPZ result folders and allows visualization.
+    """
+    from datetime import datetime
+    
+    models_exist, missing_models = check_models()
+
+    if not models_exist:
+        # If any model files are missing, show the download instructions page
+        return render_template('download.html', missing_models=missing_models)
+    
+    # Get folders in the npz directory
+    npz_dir = os.path.join(app.config['RESULT_FOLDER'], 'npz')
+    folders = []
+    
+    if os.path.exists(npz_dir):
+        for folder_name in os.listdir(npz_dir):
+            folder_path = os.path.join(npz_dir, folder_name)
+            
+            if os.path.isdir(folder_path):
+                # Count files
+                file_count = len([f for f in os.listdir(folder_path) if f.endswith('.npz')])
+                
+                # Get folder size
+                folder_size = 0
+                for dirpath, dirnames, filenames in os.walk(folder_path):
+                    for filename in filenames:
+                        file_path = os.path.join(dirpath, filename)
+                        folder_size += os.path.getsize(file_path)
+                
+                # Format size
+                if folder_size > 1024 * 1024 * 1024:
+                    size_str = f"{folder_size / (1024 * 1024 * 1024):.2f} GB"
+                elif folder_size > 1024 * 1024:
+                    size_str = f"{folder_size / (1024 * 1024):.2f} MB"
+                else:
+                    size_str = f"{folder_size / 1024:.2f} KB"
+                
+                # Get creation time
+                created = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(os.path.getctime(folder_path)))
+                
+                folders.append({
+                    'name': folder_name,
+                    'path': folder_path,
+                    'file_count': file_count,
+                    'size': size_str,
+                    'created': created
+                })
+    
+    # Sort folders by creation time (newest first)
+    folders.sort(key=lambda x: x['name'], reverse=True)
+    
+    context = {
+        'folders': folders,
+        'active_page': 'results',
+        'now': datetime.now
+    }
+    
+    return render_template('results.html', **context)
 
 
 @app.route('/dataset')
@@ -753,18 +824,26 @@ def process_dataset_worker():
         # Get dataset parameters from queue
         params = dataset_queue.get(block=False)
         
-        dataset_status['status'] = 'processing'
-        dataset_status['current'] = 0
-        dataset_status['total'] = len(params['images']) * len(params['models'])
+        # Create new status dictionary to avoid shared reference issues
+        dataset_status.clear()
+        dataset_status.update({
+            'status': 'processing',
+            'current': 0,
+            'total': len(params['images']) * len(params['models']),
+            'model_name': '',
+            'results': [],
+            'preview_images': []
+        })
         
         results = []
         
-        # Create output directories
-        npz_dir = osp.join(app.config['RESULT_FOLDER'], 'npz')
+        # Create output directories with date-based subdirectory
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        npz_dir = osp.join(app.config['RESULT_FOLDER'], 'npz', timestamp)
         os.makedirs(npz_dir, exist_ok=True)
         
         if params['generate_vis']:
-            vis_dir = osp.join(app.config['RESULT_FOLDER'], 'vis_dataset')
+            vis_dir = osp.join(app.config['RESULT_FOLDER'], 'vis_dataset', timestamp)
             os.makedirs(vis_dir, exist_ok=True)
         
         # Process each model
@@ -865,8 +944,8 @@ def process_dataset_worker():
                 'id': model_id,
                 'name': model_name,
                 'avg_time': f"{avg_inference_time:.3f}",
-                'npz_path': f"/static/results/npz/{norm_npz_filename}",
-                'raw_npz_path': f"/static/results/npz/{npz_filename}"
+                'npz_path': f"/static/results/npz/{timestamp}/{norm_npz_filename}",
+                'raw_npz_path': f"/static/results/npz/{timestamp}/{npz_filename}"
             })
         
         # Prepare preview images
@@ -875,14 +954,14 @@ def process_dataset_worker():
             for i in range(min(5, len(params['images']))):  # Show up to 5 preview images
                 preview = {
                     'name': f"Sample {i+1}",
-                    'original': f"/static/results/vis_dataset/sample_{i}.jpg",
-                    'depth': f"/static/results/vis_dataset/{params['models'][0]}/{i:04d}.png"
+                    'original': f"/static/results/vis_dataset/{timestamp}/sample_{i}.jpg",
+                    'depth': f"/static/results/vis_dataset/{timestamp}/{params['models'][0]}/{i:04d}.png"
                 }
                 
                 # Save original image
                 img_path, img = params['images'][i]
                 img_pil = Image.fromarray(img)
-                img_pil.save(osp.join(app.config['RESULT_FOLDER'], f"vis_dataset/sample_{i}.jpg"))
+                img_pil.save(osp.join(app.config['RESULT_FOLDER'], f"vis_dataset/{timestamp}/sample_{i}.jpg"))
                 
                 preview_images.append(preview)
         
@@ -923,9 +1002,29 @@ def process_dataset_start():
         # Report status updates
         last_status = None
         while True:
-            if dataset_status != last_status:
-                yield f"data: {json.dumps(dataset_status)}\n\n"
-                last_status = dataset_status.copy()
+            current_status = dataset_status.copy()  # Make a copy to avoid modification during serialization
+            
+            # Debug: print the current status to server logs
+            if current_status.get('status') == 'complete':
+                print(f"Complete status data: models={len(current_status.get('results', []))}, previews={len(current_status.get('preview_images', []))}")
+            
+            # Only send if status changed
+            if current_status != last_status:
+                try:
+                    # Convert to JSON and send
+                    json_data = json.dumps(current_status)
+                    yield f"data: {json_data}\n\n"
+                    last_status = current_status
+                    
+                    # If processing complete, add a delay to ensure client receives it, then break
+                    if current_status.get('status') == 'complete' or current_status.get('status') == 'error':
+                        time.sleep(1)  # Give client time to process the final update
+                        break
+                        
+                except Exception as e:
+                    print(f"Error sending status update: {str(e)}")
+                    yield f"data: {json.dumps({'status': 'error', 'message': 'Error sending updates'})}\n\n"
+                    break
             
             time.sleep(0.5)
     
@@ -1391,6 +1490,296 @@ def use_custom_model(model_id):
     
     # Redirect to main page
     return redirect('/')
+
+
+# -------------------------------
+# Results Visualization Routes
+# -------------------------------
+@app.route('/results/view/<folder_name>')
+def view_results(folder_name):
+    """
+    View NPZ files in the specified folder.
+    """
+    models_exist, missing_models = check_models()
+
+    if not models_exist:
+        # If any model files are missing, show the download instructions page
+        return render_template('download.html', missing_models=missing_models)
+    
+    # Get folders in the npz directory for the navigation
+    npz_dir = os.path.join(app.config['RESULT_FOLDER'], 'npz')
+    folders = []
+    selected_folder = None
+    
+    if os.path.exists(npz_dir):
+        for dir_name in os.listdir(npz_dir):
+            folder_path = os.path.join(npz_dir, dir_name)
+            
+            if os.path.isdir(folder_path):
+                # Count files
+                file_count = len([f for f in os.listdir(folder_path) if f.endswith('.npz')])
+                
+                # Get folder size
+                folder_size = 0
+                for dirpath, dirnames, filenames in os.walk(folder_path):
+                    for filename in filenames:
+                        file_path = os.path.join(dirpath, filename)
+                        folder_size += os.path.getsize(file_path)
+                
+                # Format size
+                if folder_size > 1024 * 1024 * 1024:
+                    size_str = f"{folder_size / (1024 * 1024 * 1024):.2f} GB"
+                elif folder_size > 1024 * 1024:
+                    size_str = f"{folder_size / (1024 * 1024):.2f} MB"
+                else:
+                    size_str = f"{folder_size / 1024:.2f} KB"
+                
+                # Get creation time
+                created = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(os.path.getctime(folder_path)))
+                
+                folder_info = {
+                    'name': dir_name,
+                    'path': folder_path,
+                    'file_count': file_count,
+                    'size': size_str,
+                    'created': created
+                }
+                
+                folders.append(folder_info)
+                
+                # If this is the selected folder, store its info
+                if dir_name == folder_name:
+                    selected_folder = folder_info
+    
+    # Sort folders by creation time (newest first)
+    folders.sort(key=lambda x: x['name'], reverse=True)
+    
+    # If folder doesn't exist, redirect to results page
+    if not selected_folder:
+        return redirect('/results')
+    
+    # Get NPZ files in the folder
+    npz_files = []
+    selected_folder_path = os.path.join(npz_dir, folder_name)
+    
+    if os.path.exists(selected_folder_path):
+        for file_name in os.listdir(selected_folder_path):
+            if file_name.endswith('.npz'):
+                file_path = os.path.join(selected_folder_path, file_name)
+                
+                # Get file size
+                file_size = os.path.getsize(file_path)
+                
+                # Format size
+                if file_size > 1024 * 1024 * 1024:
+                    size_str = f"{file_size / (1024 * 1024 * 1024):.2f} GB"
+                elif file_size > 1024 * 1024:
+                    size_str = f"{file_size / (1024 * 1024):.2f} MB"
+                else:
+                    size_str = f"{file_size / 1024:.2f} KB"
+                
+                # Get model and normalization info from filename
+                parts = file_name.split('_')
+                model_name = parts[0] if len(parts) > 0 else 'unknown'
+                norm_type = parts[1].split('.')[0] if len(parts) > 1 else 'raw'
+                
+                # Get array dimensions by peeking at the NPZ file
+                try:
+                    with np.load(file_path) as data:
+                        if 'pred' in data:
+                            pred_shape = data['pred'].shape
+                            image_count = pred_shape[0]
+                        else:
+                            image_count = 'Unknown'
+                except Exception as e:
+                    print(f"Error loading NPZ file {file_path}: {e}")
+                    image_count = 'Error'
+                
+                npz_files.append({
+                    'name': file_name,
+                    'path': file_path,
+                    'size': size_str,
+                    'model': model_name,
+                    'normalization': norm_type,
+                    'image_count': image_count
+                })
+    
+    # Sort NPZ files by name
+    npz_files.sort(key=lambda x: x['name'])
+    
+    return render_template('results.html', folders=folders, selected_folder=selected_folder, npz_files=npz_files)
+
+
+@app.route('/results/storage')
+def results_storage():
+    """
+    Get storage usage for results.
+    """
+    npz_dir = os.path.join(app.config['RESULT_FOLDER'], 'npz')
+    total_size = 0
+    
+    if os.path.exists(npz_dir):
+        for dirpath, dirnames, filenames in os.walk(npz_dir):
+            for filename in filenames:
+                file_path = os.path.join(dirpath, filename)
+                total_size += os.path.getsize(file_path)
+    
+    # Format size
+    if total_size > 1024 * 1024 * 1024:
+        size_str = f"{total_size / (1024 * 1024 * 1024):.2f} GB"
+    elif total_size > 1024 * 1024:
+        size_str = f"{total_size / (1024 * 1024):.2f} MB"
+    else:
+        size_str = f"{total_size / 1024:.2f} KB"
+    
+    return jsonify({'usage': size_str})
+
+
+@app.route('/results/delete/<folder_name>', methods=['POST'])
+def delete_results_folder(folder_name):
+    """
+    Delete a results folder.
+    """
+    npz_dir = os.path.join(app.config['RESULT_FOLDER'], 'npz')
+    folder_path = os.path.join(npz_dir, folder_name)
+    
+    # Security check - make sure the folder is in the npz directory
+    if not os.path.abspath(folder_path).startswith(os.path.abspath(npz_dir)):
+        return jsonify({'success': False, 'error': 'Invalid folder path'})
+    
+    if not os.path.exists(folder_path):
+        return jsonify({'success': False, 'error': 'Folder not found'})
+    
+    try:
+        # Delete the folder and all its contents
+        shutil.rmtree(folder_path)
+        
+        # Also check for matching visualization folder
+        vis_dir = os.path.join(app.config['RESULT_FOLDER'], 'vis_dataset', folder_name)
+        if os.path.exists(vis_dir):
+            shutil.rmtree(vis_dir)
+        
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/results/data')
+def get_npz_data():
+    """
+    Get data from an NPZ file for visualization.
+    """
+    file_path = request.args.get('file')
+    
+    if not file_path:
+        return jsonify({'error': 'No file specified'})
+    
+    # Security check - make sure the file is in the results directory
+    if not os.path.abspath(file_path).startswith(os.path.abspath(app.config['RESULT_FOLDER'])):
+        return jsonify({'error': 'Invalid file path'})
+    
+    if not os.path.exists(file_path):
+        return jsonify({'error': 'File not found'})
+    
+    try:
+        # Load the NPZ file - use allow_pickle=True to handle more formats
+        with np.load(file_path, allow_pickle=True) as data:
+            # Debug information about file contents
+            print(f"NPZ file keys: {list(data.keys())}")
+            
+            # Check for 'pred' key (most common) or try other keys
+            depth_key = None
+            if 'pred' in data:
+                depth_key = 'pred'
+            elif 'depth' in data:
+                depth_key = 'depth'
+            elif 'predictions' in data:
+                depth_key = 'predictions'
+            else:
+                # If no standard keys found, use the first array
+                for key in data.keys():
+                    if isinstance(data[key], np.ndarray):
+                        depth_key = key
+                        break
+                        
+            if depth_key is None:
+                return jsonify({'error': 'No valid depth data found in file'})
+                
+            print(f"Using depth key: {depth_key}")
+            depth_data = data[depth_key]
+            
+            # Check if depth_data needs reshaping
+            if depth_data.ndim == 1 and hasattr(depth_data[0], 'shape'):
+                # This handles the case where arrays are stored as objects
+                # Convert to a proper ndarray
+                shapes = np.array([img.shape for img in depth_data])
+                if np.all(shapes == shapes[0]):  # All same shape
+                    reshaped_data = np.zeros((len(depth_data),) + tuple(shapes[0]), dtype=np.float32)
+                    for i, img in enumerate(depth_data):
+                        reshaped_data[i] = img
+                    depth_data = reshaped_data
+                else:
+                    return jsonify({'error': 'Inconsistent image shapes in depth data'})
+            
+            # Check array dimensions
+            if depth_data.ndim < 2:
+                return jsonify({'error': 'Depth data has invalid dimensions'})
+            
+            # Handle single image case
+            if depth_data.ndim == 2:
+                depth_data = depth_data.reshape(1, *depth_data.shape)
+                
+            # For large datasets, limit to the first 50 images to reduce memory usage
+            if depth_data.shape[0] > 50:
+                depth_data = depth_data[:50]
+                was_limited = True
+            else:
+                was_limited = False
+            
+            # Convert to list of dictionaries for JSON serialization
+            result = []
+            for i in range(depth_data.shape[0]):
+                try:
+                    # Get depth map for this image
+                    depth_map = depth_data[i].astype(np.float32)  # Convert to float32 for consistency
+                    
+                    # Handle NaN or infinite values
+                    depth_map = np.nan_to_num(depth_map, nan=0.0, posinf=1.0, neginf=0.0)
+                    
+                    # Get min/max (safely)
+                    min_depth = float(depth_map.min())
+                    max_depth = float(depth_map.max())
+                    
+                    # Normalize depth map to 0-1 range
+                    if max_depth > min_depth:
+                        normalized = (depth_map - min_depth) / (max_depth - min_depth)
+                    else:
+                        normalized = np.zeros_like(depth_map)
+                    
+                    # Flatten to 1D array for JSON
+                    result.append({
+                        'data': normalized.flatten().tolist(),
+                        'width': depth_map.shape[1] if depth_map.ndim > 1 else 1,
+                        'height': depth_map.shape[0],
+                        'min': min_depth,
+                        'max': max_depth
+                    })
+                except Exception as img_error:
+                    print(f"Error processing image {i}: {str(img_error)}")
+                    # Skip this image
+            
+            # If no valid images were processed
+            if len(result) == 0:
+                return jsonify({'error': 'No valid depth maps could be processed'})
+            
+            return jsonify({
+                'data': result,
+                'total_images': int(data[depth_key].shape[0] if hasattr(data[depth_key], 'shape') else len(data[depth_key])),
+                'was_limited': was_limited
+            })
+    except Exception as e:
+        print(f"Error loading NPZ file: {str(e)}")
+        return jsonify({'error': f'Error loading file: {str(e)}'})
 
 
 # -------------------------------

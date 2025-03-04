@@ -88,39 +88,59 @@ document.addEventListener('DOMContentLoaded', function() {
         const eventSource = new EventSource('/process-dataset/start');
         
         eventSource.onmessage = function(event) {
-            const data = JSON.parse(event.data);
-            
-            if (data.status === 'init_complete') {
-                // Dataset initialization complete, upload files
-                fetch('/process-dataset/upload', {
-                    method: 'POST',
-                    body: formData
-                })
-                .then(response => response.json())
-                .then(data => {
-                    if (data.error) {
-                        showStatus(`Error: ${data.error}`, 'danger');
+            console.log("SSE message received:", event.data.substring(0, 100) + "...");
+            try {
+                const data = JSON.parse(event.data);
+                console.log("Parsed data status:", data.status);
+                
+                if (data.status === 'init_complete') {
+                    // Dataset initialization complete, upload files
+                    fetch('/process-dataset/upload', {
+                        method: 'POST',
+                        body: formData
+                    })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.error) {
+                            showStatus(`Error: ${data.error}`, 'danger');
+                            eventSource.close();
+                            loadingOverlay.style.display = 'none';
+                            return;
+                        }
+                        
+                        showStatus(`Dataset uploaded successfully. Starting processing...`, 'info');
+                        fetch('/process-dataset/process', {
+                            method: 'POST'
+                        });
+                    })
+                    .catch(error => {
+                        showStatus(`Error: ${error.message}`, 'danger');
                         eventSource.close();
                         loadingOverlay.style.display = 'none';
-                        return;
-                    }
-                    
-                    showStatus(`Dataset uploaded successfully. Starting processing...`, 'info');
-                    fetch('/process-dataset/process', {
-                        method: 'POST'
                     });
-                })
-                .catch(error => {
-                    showStatus(`Error: ${error.message}`, 'danger');
-                    eventSource.close();
-                    loadingOverlay.style.display = 'none';
-                });
-            } 
-            else if (data.status === 'processing') {
+                } 
+                else if (data.status === 'processing') {
                 // Update progress
                 const percent = Math.round((data.current / data.total) * 100);
                 progressBar.style.width = `${percent}%`;
-                progressText.textContent = `${percent}% (${data.current}/${data.total})`;
+                
+                // Calculate ETA
+                const elapsedTime = (new Date().getTime() - startTime) / 1000; // in seconds
+                const timePerItem = elapsedTime / data.current;
+                const remainingItems = data.total - data.current;
+                const eta = Math.round(timePerItem * remainingItems);
+                
+                // Format ETA
+                let etaText = '';
+                if (eta > 60) {
+                    const minutes = Math.floor(eta / 60);
+                    const seconds = eta % 60;
+                    etaText = `ETA: ${minutes}m ${seconds}s`;
+                } else {
+                    etaText = `ETA: ${eta}s`;
+                }
+                
+                progressText.textContent = `${percent}% (${data.current}/${data.total}) - ${etaText}`;
                 progressLabel.textContent = `Processing model: ${data.model_name}`;
                 loadingText.textContent = `Processing ${data.current}/${data.total} images with ${data.model_name}...`;
             }
@@ -142,6 +162,10 @@ document.addEventListener('DOMContentLoaded', function() {
                 // Show results
                 showStatus(`Processing complete! Elapsed time: ${timeString}`, 'success');
                 
+                console.log("Complete data:", data);
+                console.log("Results models:", data.results ? data.results.length : 0);
+                console.log("Preview images:", data.preview_images ? data.preview_images.length : 0);
+                
                 // Display results
                 resultsCard.classList.remove('d-none');
                 resultsContainer.innerHTML = '';
@@ -149,19 +173,23 @@ document.addEventListener('DOMContentLoaded', function() {
                 // Add download links for each model
                 let resultsHtml = '<h4 class="h6 mb-3">Download Prediction Files:</h4><div class="list-group">';
                 
-                data.models.forEach(model => {
-                    resultsHtml += `
-                        <div class="list-group-item d-flex justify-content-between align-items-center">
-                            <div>
-                                <strong>${model.name}</strong>
-                                <small class="d-block text-muted">Avg. inference: ${model.avg_time}s</small>
+                if (data.results && data.results.length > 0) {
+                    data.results.forEach(model => {
+                        resultsHtml += `
+                            <div class="list-group-item d-flex justify-content-between align-items-center">
+                                <div>
+                                    <strong>${model.name}</strong>
+                                    <small class="d-block text-muted">Avg. inference: ${model.avg_time}s</small>
+                                </div>
+                                <div>
+                                    <a href="${model.npz_path}" class="btn btn-sm btn-primary" download>Download NPZ</a>
+                                </div>
                             </div>
-                            <div>
-                                <a href="${model.npz_path}" class="btn btn-sm btn-primary" download>Download NPZ</a>
-                            </div>
-                        </div>
-                    `;
-                });
+                        `;
+                    });
+                } else {
+                    resultsHtml += '<div class="alert alert-warning">No model results available.</div>';
+                }
                 
                 resultsHtml += '</div>';
                 resultsContainer.innerHTML = resultsHtml;
@@ -196,6 +224,8 @@ document.addEventListener('DOMContentLoaded', function() {
                         `;
                         previewContainer.appendChild(previewCard);
                     });
+                } else {
+                    previewSection.classList.add('d-none');
                 }
             }
             else if (data.status === 'error') {
@@ -203,6 +233,12 @@ document.addEventListener('DOMContentLoaded', function() {
                 eventSource.close();
                 loadingOverlay.style.display = 'none';
                 showStatus(`Error: ${data.message}`, 'danger');
+            }
+            } catch (e) {
+                console.error("Error parsing SSE data:", e);
+                showStatus(`Error parsing server response: ${e.message}`, 'danger');
+                eventSource.close();
+                loadingOverlay.style.display = 'none';
             }
         };
         

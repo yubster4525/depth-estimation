@@ -33,3 +33,6 @@ ENV/
 # Downloaded model files (too large for git)
 /models/downloads/*
 !/models/downloads/.gitkeep
+
+# Development files
+CLAUDE.md
