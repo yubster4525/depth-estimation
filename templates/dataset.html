@@ -27,29 +27,29 @@
                     <div class="card-body">
                         <form id="dataset-form">
                             <div class="mb-3">
-                                <label class="form-label">Dataset Type:</label>
-                                <select id="dataset-type" class="form-select">
-                                    <option value="syns">SYNS-Patches</option>
-                                    <option value="custom">Custom Image Folder</option>
+                                <label class="form-label">Available Datasets:</label>
+                                <select id="dataset-select" class="form-select">
+                                    <option value="">-- Select a dataset --</option>
+                                    {% for dataset in available_datasets %}
+                                    <option value="{{ dataset.path }}">{{ dataset.name }} ({{ dataset.image_count }} images)</option>
+                                    {% endfor %}
                                 </select>
+                                <small class="text-muted">Datasets from custom_datasets directory</small>
                             </div>
                             
-                            <div id="syns-options" class="mb-3">
-                                <label class="form-label">SYNS Dataset Split:</label>
-                                <select id="syns-split" class="form-select">
+                            <div class="mb-3">
+                                <label class="form-label">Split (if available):</label>
+                                <select id="dataset-split" class="form-select">
+                                    <option value="all">All Images</option>
                                     <option value="val">Validation</option>
                                     <option value="test">Test</option>
                                 </select>
-                                
-                                <div class="mt-3">
-                                    <label for="syns-zip" class="form-label">SYNS-Patches Zip File:</label>
-                                    <input type="file" class="form-control" id="syns-zip" accept=".zip">
-                                </div>
                             </div>
                             
-                            <div id="custom-options" class="mb-3 d-none">
-                                <label for="custom-folder" class="form-label">Image Folder:</label>
-                                <input type="file" class="form-control" id="custom-folder" webkitdirectory directory multiple>
+                            <div class="mb-3">
+                                <label for="custom-upload" class="form-label">Or upload images:</label>
+                                <input type="file" class="form-control" id="custom-upload" webkitdirectory directory multiple>
+                                <small class="text-muted">Upload a folder containing images</small>
                             </div>
                             
                             <div class="mb-3">

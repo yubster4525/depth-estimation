@@ -1,8 +1,8 @@
 document.addEventListener('DOMContentLoaded', function() {
     const datasetForm = document.getElementById('dataset-form');
-    const datasetType = document.getElementById('dataset-type');
-    const synsOptions = document.getElementById('syns-options');
-    const customOptions = document.getElementById('custom-options');
+    const datasetSelect = document.getElementById('dataset-select');
+    const datasetSplit = document.getElementById('dataset-split');
+    const customUpload = document.getElementById('custom-upload');
     const processBtn = document.getElementById('process-btn');
     const statusContainer = document.getElementById('status-container');
     const progressContainer = document.getElementById('progress-container');
@@ -16,32 +16,31 @@ document.addEventListener('DOMContentLoaded', function() {
     const loadingOverlay = document.getElementById('loading-overlay');
     const loadingText = document.getElementById('loading-text');
     
-    // Toggle dataset type options
-    datasetType.addEventListener('change', function() {
-        if (this.value === 'syns') {
-            synsOptions.classList.remove('d-none');
-            customOptions.classList.add('d-none');
+    // Toggle between dataset selection and upload
+    datasetSelect.addEventListener('change', function() {
+        if (this.value) {
+            customUpload.disabled = true;
+            customUpload.value = '';
         } else {
-            synsOptions.classList.add('d-none');
-            customOptions.classList.remove('d-none');
+            customUpload.disabled = false;
+        }
+    });
+    
+    customUpload.addEventListener('change', function() {
+        if (this.files && this.files.length > 0) {
+            datasetSelect.disabled = true;
+            datasetSelect.value = '';
+        } else {
+            datasetSelect.disabled = false;
         }
     });
     
     // Process button click handler
     processBtn.addEventListener('click', function() {
         // Validate form
-        if (datasetType.value === 'syns') {
-            const synsZip = document.getElementById('syns-zip').files[0];
-            if (!synsZip) {
-                showStatus('Error: Please select a SYNS-Patches zip file', 'danger');
-                return;
-            }
-        } else {
-            const customFolder = document.getElementById('custom-folder').files;
-            if (customFolder.length === 0) {
-                showStatus('Error: Please select a folder containing images', 'danger');
-                return;
-            }
+        if (!datasetSelect.value && (!customUpload.files || customUpload.files.length === 0)) {
+            showStatus('Error: Please select a dataset or upload images', 'danger');
+            return;
         }
         
         // Get selected models
@@ -62,17 +61,18 @@ document.addEventListener('DOMContentLoaded', function() {
         
         // Prepare form data
         const formData = new FormData();
-        formData.append('dataset_type', datasetType.value);
         
-        if (datasetType.value === 'syns') {
-            formData.append('syns_zip', document.getElementById('syns-zip').files[0]);
-            formData.append('syns_split', document.getElementById('syns-split').value);
+        if (datasetSelect.value) {
+            formData.append('dataset_path', datasetSelect.value);
+            formData.append('dataset_split', datasetSplit.value);
+            formData.append('dataset_type', 'existing');
         } else {
             // For custom folder, append all files
-            const files = document.getElementById('custom-folder').files;
+            const files = customUpload.files;
             for (let i = 0; i < files.length; i++) {
                 formData.append('custom_images[]', files[i]);
             }
+            formData.append('dataset_type', 'upload');
         }
         
         // Add other parameters

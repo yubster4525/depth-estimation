@@ -191,8 +191,92 @@ def dataset_page():
             'name': model_info['name'],
             'description': model_info['description']
         }
+    
+    # Get available datasets
+    available_datasets = []
+    custom_datasets_dir = os.path.join(os.getcwd(), 'custom_datasets')
+    
+    if os.path.exists(custom_datasets_dir):
+        for dataset_name in os.listdir(custom_datasets_dir):
+            dataset_path = os.path.join(custom_datasets_dir, dataset_name)
+            
+            # Skip non-directories
+            if not os.path.isdir(dataset_path):
+                continue
+                
+            # Count images
+            image_count = 0
+            image_dir = os.path.join(dataset_path, 'images') if os.path.exists(os.path.join(dataset_path, 'images')) else dataset_path
+            
+            for ext in ['*.jpg', '*.jpeg', '*.png', '*.bmp']:
+                image_count += len(glob.glob(os.path.join(image_dir, ext)))
+            
+            if image_count > 0:
+                available_datasets.append({
+                    'name': dataset_name,
+                    'path': dataset_path,
+                    'image_count': image_count
+                })
 
-    return render_template('dataset.html', models=template_models)
+    return render_template('dataset.html', models=template_models, available_datasets=available_datasets)
+
+
+@app.route('/training')
+def training_page():
+    """
+    Training page. Allows training custom models on datasets.
+    """
+    models_exist, missing_models = check_models()
+
+    if not models_exist:
+        # If any model files are missing, show the download instructions page
+        return render_template('download.html', missing_models=missing_models)
+    
+    # Get available datasets
+    datasets = []
+    custom_datasets_dir = os.path.join(os.getcwd(), 'custom_datasets')
+    
+    if os.path.exists(custom_datasets_dir):
+        for dataset_name in os.listdir(custom_datasets_dir):
+            dataset_path = os.path.join(custom_datasets_dir, dataset_name)
+            
+            # Check if it's a directory and has required structure
+            if (os.path.isdir(dataset_path) and 
+                os.path.exists(os.path.join(dataset_path, 'images')) and 
+                os.path.exists(os.path.join(dataset_path, 'depths'))):
+                
+                # Count images
+                image_count = len(os.listdir(os.path.join(dataset_path, 'images')))
+                
+                datasets.append({
+                    'name': dataset_name,
+                    'path': dataset_path,
+                    'image_count': image_count
+                })
+    
+    # Get custom trained models
+    custom_models = []
+    custom_models_dir = os.path.join(os.getcwd(), 'custom_models', 'trained')
+    
+    if os.path.exists(custom_models_dir):
+        for model_dir in os.listdir(custom_models_dir):
+            model_path = os.path.join(custom_models_dir, model_dir)
+            
+            # Check if it has required files
+            if (os.path.isdir(model_path) and 
+                os.path.exists(os.path.join(model_path, 'model.pth')) and
+                os.path.exists(os.path.join(model_path, 'info.json'))):
+                
+                # Load model info
+                with open(os.path.join(model_path, 'info.json'), 'r') as f:
+                    model_info = json.load(f)
+                
+                # Add model ID
+                model_info['id'] = model_dir
+                
+                custom_models.append(model_info)
+    
+    return render_template('training.html', datasets=datasets, custom_models=custom_models)
 
 
 @app.route('/static/<path:filename>')
@@ -851,49 +935,61 @@ def process_dataset_upload():
         if not valid_models:
             return jsonify({'error': 'No valid models selected'})
         
-        # Handle SYNS dataset
-        if dataset_type == 'syns':
-            if 'syns_zip' not in request.files:
-                return jsonify({'error': 'No SYNS zip file uploaded'})
-            
-            syns_zip = request.files['syns_zip']
-            syns_split = request.form.get('syns_split', 'val')
-            
-            # Save the zip file
-            zip_path = osp.join(dataset_temp_dir, 'syns_patches.zip')
-            syns_zip.save(zip_path)
-            
-            # Initialize SYNS accessor
-            from io import BytesIO
-            import zipfile
-            
-            # Load images from the zip
-            images = []
-            with zipfile.ZipFile(zip_path, 'r') as zip_file:
-                # Load split files
-                split_files_path = f"syns_patches/splits/{syns_split}_files.txt"
-                if split_files_path not in zip_file.namelist():
-                    return jsonify({'error': f"Split file '{split_files_path}' not found in zip"})
-                
-                split_files_content = zip_file.read(split_files_path).decode("utf-8")
-                split_files = split_files_content.splitlines()
-                
-                # Load images
-                for line in split_files:
-                    folder_name, image_name = line.split()
-                    image_path = f"syns_patches/{folder_name}/images/{image_name}"
-                    
-                    if image_path not in zip_file.namelist():
-                        return jsonify({'error': f"Image '{image_path}' not found in zip"})
-                    
-                    image_data = zip_file.read(image_path)
-                    image = Image.open(BytesIO(image_data)).convert('RGB')
-                    images.append((image_path, np.array(image)))
+        images = []
         
-        # Handle custom image folder
-        else:
+        # Handle existing dataset
+        if dataset_type == 'existing':
+            dataset_path = request.form.get('dataset_path')
+            dataset_split = request.form.get('dataset_split', 'all')
+            
+            if not dataset_path or not os.path.exists(dataset_path):
+                return jsonify({'error': 'Invalid dataset path'})
+            
+            # Check for images directory
+            if os.path.exists(os.path.join(dataset_path, 'images')):
+                image_dir = os.path.join(dataset_path, 'images')
+            else:
+                image_dir = dataset_path
+            
+            # Check for split files
+            split_files = []
+            if dataset_split != 'all' and os.path.exists(os.path.join(dataset_path, 'splits')):
+                split_file_path = os.path.join(dataset_path, 'splits', f'{dataset_split}_files.txt')
+                if os.path.exists(split_file_path):
+                    with open(split_file_path, 'r') as f:
+                        for line in f:
+                            parts = line.strip().split()
+                            if len(parts) >= 2:
+                                folder, filename = parts[0], parts[1]
+                                split_files.append(os.path.join(folder, 'images', filename))
+                            elif len(parts) == 1:
+                                split_files.append(parts[0])
+            
+            # Load images based on split or all
+            if split_files:
+                # Load only images in the split
+                for img_path in split_files:
+                    full_path = os.path.join(dataset_path, img_path)
+                    if os.path.exists(full_path):
+                        try:
+                            img = Image.open(full_path).convert('RGB')
+                            images.append((img_path, np.array(img)))
+                        except Exception as e:
+                            print(f"Error loading image {full_path}: {str(e)}")
+            else:
+                # Load all images in the directory
+                for ext in ['*.jpg', '*.jpeg', '*.png', '*.bmp']:
+                    for img_path in glob.glob(os.path.join(image_dir, ext)):
+                        try:
+                            img = Image.open(img_path).convert('RGB')
+                            images.append((os.path.basename(img_path), np.array(img)))
+                        except Exception as e:
+                            print(f"Error loading image {img_path}: {str(e)}")
+        
+        # Handle uploaded images
+        elif dataset_type == 'upload':
             if 'custom_images[]' not in request.files:
-                return jsonify({'error': 'No custom images uploaded'})
+                return jsonify({'error': 'No images uploaded'})
             
             custom_images = request.files.getlist('custom_images[]')
             
@@ -913,6 +1009,10 @@ def process_dataset_upload():
                     images.append((img_file.filename, np.array(img)))
                 except Exception as e:
                     print(f"Error loading image {img_file.filename}: {str(e)}")
+        
+        # Check if we have images
+        if not images:
+            return jsonify({'error': 'No valid images found in the dataset'})
         
         # Queue the dataset for processing
         dataset_queue.put({
@@ -947,6 +1047,305 @@ def process_dataset_process():
     """
     # This just triggers the worker thread to continue
     return jsonify({'success': True})
+
+
+# Import Response for SSE
+from flask import Response
+
+
+# -------------------------------
+# Training Routes
+# -------------------------------
+import subprocess
+import uuid
+import threading
+from queue import Queue
+
+# Global variables for training
+training_status = {}
+training_events = {}
+training_processes = {}
+
+@app.route('/training/start', methods=['POST'])
+def start_training():
+    """
+    Start training a custom model.
+    """
+    try:
+        # Create a unique ID for this training run
+        run_id = str(uuid.uuid4())
+        
+        # Set initial status
+        training_status[run_id] = {
+            'status': 'preparing',
+            'message': 'Preparing dataset and model...'
+        }
+        
+        # Create a queue for events
+        training_events[run_id] = Queue()
+        
+        # Handle dataset upload if provided
+        if 'new_dataset' in request.files:
+            dataset_file = request.files['new_dataset']
+            if dataset_file.filename:
+                # Create dataset directory
+                dataset_name = f"upload_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                dataset_dir = os.path.join('custom_datasets', dataset_name)
+                os.makedirs(dataset_dir, exist_ok=True)
+                
+                # Save and extract dataset
+                zip_path = os.path.join(dataset_dir, 'dataset.zip')
+                dataset_file.save(zip_path)
+                
+                # Extract ZIP file
+                import zipfile
+                with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                    zip_ref.extractall(dataset_dir)
+                
+                # Check for required directory structure
+                if not (os.path.exists(os.path.join(dataset_dir, 'images')) and 
+                        os.path.exists(os.path.join(dataset_dir, 'depths'))):
+                    return jsonify({'error': 'Uploaded dataset must contain "images" and "depths" directories'})
+                
+                dataset_path = dataset_dir
+            else:
+                return jsonify({'error': 'No dataset file provided'})
+        else:
+            # Use existing dataset
+            dataset_path = request.form.get('dataset_path')
+            if not dataset_path:
+                return jsonify({'error': 'No dataset specified'})
+        
+        # Start training in a separate thread
+        def run_training():
+            try:
+                # Prepare command arguments
+                cmd = [
+                    'python', 'train.py',
+                    '--dataset_path', dataset_path,
+                    '--batch_size', request.form.get('batch_size', '8'),
+                    '--epochs', request.form.get('epochs', '50'),
+                    '--lr', request.form.get('learning_rate', '0.001'),
+                    '--val_split', request.form.get('val_split', '0.1'),
+                    '--base_channels', request.form.get('base_channels', '64'),
+                ]
+                
+                # Add early stopping if enabled
+                early_stopping = request.form.get('early_stopping', '0')
+                if early_stopping != '0':
+                    cmd.extend(['--early_stopping', early_stopping])
+                
+                # Add TensorBoard if enabled
+                if request.form.get('use_tensorboard') == 'true':
+                    cmd.append('--use_tensorboard')
+                
+                # Start the training process
+                process = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    universal_newlines=True,
+                    bufsize=1
+                )
+                
+                # Store process
+                training_processes[run_id] = process
+                
+                # Update status to training
+                training_status[run_id] = {
+                    'status': 'training',
+                    'epoch': 0,
+                    'total_epochs': int(request.form.get('epochs', '50')),
+                    'train_loss': 0.0,
+                    'val_loss': 0.0
+                }
+                
+                # Monitor process output
+                for line in process.stdout:
+                    # Parse output for progress updates
+                    if 'Epoch' in line and 'Train Loss' in line:
+                        try:
+                            # Extract epoch number
+                            epoch_str = line.split('Epoch')[1].split('/')[0].strip()
+                            epoch = int(epoch_str)
+                            
+                            # Extract losses
+                            train_loss = float(line.split('Train Loss:')[1].split(',')[0].strip())
+                            val_loss = float(line.split('Val Loss:')[1].split(',')[0].strip())
+                            
+                            # Update status
+                            training_status[run_id]['status'] = 'training'
+                            training_status[run_id]['epoch'] = epoch
+                            training_status[run_id]['train_loss'] = train_loss
+                            training_status[run_id]['val_loss'] = val_loss
+                            
+                            # Check for visualization updates
+                            viz_path = os.path.join('custom_models', f"unet_{datetime.now().strftime('%Y%m%d')}*", f"depth_viz_epoch_{epoch}.png")
+                            viz_files = glob.glob(viz_path)
+                            if viz_files:
+                                training_status[run_id]['visualization_path'] = '/' + viz_files[0].replace('\\', '/').lstrip('/')
+                            
+                            # Put update in queue
+                            training_events[run_id].put(training_status[run_id].copy())
+                        except Exception as e:
+                            print(f"Error parsing training output: {str(e)}")
+                    
+                    # Check for completion
+                    if 'Training complete!' in line:
+                        # Extract best validation loss
+                        try:
+                            best_val_loss = float(line.split('Best validation loss:')[1].split('(')[0].strip())
+                            
+                            # Update status
+                            training_status[run_id]['status'] = 'completed'
+                            training_status[run_id]['best_val_loss'] = best_val_loss
+                            
+                            # Put update in queue
+                            training_events[run_id].put(training_status[run_id].copy())
+                        except Exception as e:
+                            print(f"Error parsing completion output: {str(e)}")
+                
+                # Process complete
+                process.wait()
+                
+                # Check for errors
+                if process.returncode != 0:
+                    error_output = process.stderr.read()
+                    training_status[run_id] = {
+                        'status': 'error',
+                        'message': f"Training failed with exit code {process.returncode}: {error_output}"
+                    }
+                    training_events[run_id].put(training_status[run_id].copy())
+            except Exception as e:
+                # Handle exceptions
+                training_status[run_id] = {
+                    'status': 'error',
+                    'message': str(e)
+                }
+                training_events[run_id].put(training_status[run_id].copy())
+        
+        # Start training thread
+        train_thread = threading.Thread(target=run_training)
+        train_thread.daemon = True
+        train_thread.start()
+        
+        # Return success response
+        return jsonify({
+            'status': 'started',
+            'run_id': run_id
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)})
+
+
+@app.route('/training/monitor/<run_id>')
+def monitor_training(run_id):
+    """
+    Monitor training progress with server-sent events.
+    """
+    def event_stream():
+        # Check if run_id exists
+        if run_id not in training_events:
+            yield f"data: {json.dumps({'status': 'error', 'message': 'Invalid run ID'})}\n\n"
+            return
+        
+        # Send initial status
+        yield f"data: {json.dumps(training_status[run_id])}\n\n"
+        
+        # Monitor events queue
+        while True:
+            try:
+                # Get events from queue with timeout
+                try:
+                    status = training_events[run_id].get(timeout=1)
+                    yield f"data: {json.dumps(status)}\n\n"
+                    
+                    # If training is complete or failed, end the stream
+                    if status['status'] in ['completed', 'error']:
+                        break
+                except Exception:
+                    # No events in queue, continue
+                    pass
+                
+                # Check if process is still running
+                if run_id in training_processes:
+                    process = training_processes[run_id]
+                    if process.poll() is not None and training_events[run_id].empty():
+                        # Process ended but no completion message
+                        error_output = process.stderr.read() if process.stderr else "Unknown error"
+                        yield f"data: {json.dumps({'status': 'error', 'message': f'Training process ended unexpectedly: {error_output}'})}\n\n"
+                        break
+            
+            except Exception as e:
+                # Handle exceptions
+                yield f"data: {json.dumps({'status': 'error', 'message': str(e)})}\n\n"
+                break
+        
+        # Clean up resources
+        if run_id in training_events:
+            del training_events[run_id]
+        if run_id in training_processes:
+            del training_processes[run_id]
+        if run_id in training_status:
+            del training_status[run_id]
+    
+    return Response(event_stream(), mimetype="text/event-stream")
+
+
+@app.route('/training/models')
+def get_trained_models():
+    """
+    Get list of custom trained models.
+    """
+    custom_models = []
+    custom_models_dir = os.path.join(os.getcwd(), 'custom_models', 'trained')
+    
+    if os.path.exists(custom_models_dir):
+        for model_dir in os.listdir(custom_models_dir):
+            model_path = os.path.join(custom_models_dir, model_dir)
+            
+            # Check if it has required files
+            if (os.path.isdir(model_path) and 
+                os.path.exists(os.path.join(model_path, 'model.pth')) and
+                os.path.exists(os.path.join(model_path, 'info.json'))):
+                
+                # Load model info
+                with open(os.path.join(model_path, 'info.json'), 'r') as f:
+                    model_info = json.load(f)
+                
+                # Add model ID
+                model_info['id'] = model_dir
+                
+                custom_models.append(model_info)
+    
+    return jsonify({'models': custom_models})
+
+
+@app.route('/use-model/<model_id>')
+def use_custom_model(model_id):
+    """
+    Use a custom trained model for inference.
+    """
+    # Check if model exists
+    model_path = os.path.join('custom_models', 'trained', model_id)
+    if not os.path.exists(model_path):
+        return redirect('/')
+    
+    # Load model info
+    with open(os.path.join(model_path, 'info.json'), 'r') as f:
+        model_info = json.load(f)
+    
+    # Add model to MODELS dictionary
+    MODELS[f"custom_{model_id}"] = {
+        'name': model_info['name'],
+        'description': model_info['description'],
+        'path': os.path.join(model_path, 'model.pth'),
+        'type': model_info['type'],
+        'input_size': model_info['input_size']
+    }
+    
+    # Redirect to main page
+    return redirect('/')
 
 
 # -------------------------------
