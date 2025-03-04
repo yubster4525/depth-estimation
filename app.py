@@ -205,18 +205,38 @@ def dataset_page():
             if not os.path.isdir(dataset_path):
                 continue
                 
-            # Count images
+            # Count images - look for direct images or nested folders
             image_count = 0
-            image_dir = os.path.join(dataset_path, 'images') if os.path.exists(os.path.join(dataset_path, 'images')) else dataset_path
             
-            for ext in ['*.jpg', '*.jpeg', '*.png', '*.bmp']:
-                image_count += len(glob.glob(os.path.join(image_dir, ext)))
+            # First check if there are direct images in an 'images' subfolder
+            if os.path.exists(os.path.join(dataset_path, 'images')):
+                direct_image_dir = os.path.join(dataset_path, 'images')
+                for ext in ['*.jpg', '*.jpeg', '*.png', '*.bmp']:
+                    image_count += len(glob.glob(os.path.join(direct_image_dir, ext)))
+            
+            # For datasets like SYNS-Patches with nested structure
+            if image_count == 0:
+                # Look for nested image directories
+                for subdir in glob.glob(os.path.join(dataset_path, '*')):
+                    if os.path.isdir(subdir) and os.path.exists(os.path.join(subdir, 'images')):
+                        nested_image_dir = os.path.join(subdir, 'images')
+                        for ext in ['*.jpg', '*.jpeg', '*.png', '*.bmp']:
+                            image_count += len(glob.glob(os.path.join(nested_image_dir, ext)))
+            
+            # Fallback to direct images in the dataset folder
+            if image_count == 0:
+                for ext in ['*.jpg', '*.jpeg', '*.png', '*.bmp']:
+                    image_count += len(glob.glob(os.path.join(dataset_path, ext)))
             
             if image_count > 0:
+                # Check if it has split files
+                has_splits = os.path.exists(os.path.join(dataset_path, 'splits'))
+                
                 available_datasets.append({
                     'name': dataset_name,
                     'path': dataset_path,
-                    'image_count': image_count
+                    'image_count': image_count,
+                    'has_splits': has_splits
                 })
 
     return render_template('dataset.html', models=template_models, available_datasets=available_datasets)
@@ -978,14 +998,38 @@ def process_dataset_upload():
                         except Exception as e:
                             print(f"Error loading image {full_path}: {str(e)}")
             else:
-                # Load all images in the directory
-                for ext in ['*.jpg', '*.jpeg', '*.png', '*.bmp']:
-                    for img_path in glob.glob(os.path.join(image_dir, ext)):
-                        try:
-                            img = Image.open(img_path).convert('RGB')
-                            images.append((os.path.basename(img_path), np.array(img)))
-                        except Exception as e:
-                            print(f"Error loading image {img_path}: {str(e)}")
+                # Check dataset structure
+                is_nested = False
+                for subdir in glob.glob(os.path.join(dataset_path, '*')):
+                    if os.path.isdir(subdir) and os.path.exists(os.path.join(subdir, 'images')):
+                        is_nested = True
+                        break
+                
+                if is_nested:
+                    # For nested structure like SYNS-Patches
+                    for scene_dir in glob.glob(os.path.join(dataset_path, '*')):
+                        if os.path.isdir(scene_dir) and os.path.exists(os.path.join(scene_dir, 'images')):
+                            scene_name = os.path.basename(scene_dir)
+                            scene_img_dir = os.path.join(scene_dir, 'images')
+                            
+                            for ext in ['*.jpg', '*.jpeg', '*.png', '*.bmp']:
+                                for img_path in glob.glob(os.path.join(scene_img_dir, ext)):
+                                    try:
+                                        img = Image.open(img_path).convert('RGB')
+                                        # Store with path relative to dataset root: scene/images/file.png
+                                        rel_path = os.path.join(scene_name, 'images', os.path.basename(img_path))
+                                        images.append((rel_path, np.array(img)))
+                                    except Exception as e:
+                                        print(f"Error loading image {img_path}: {str(e)}")
+                else:
+                    # For simple structure with images directly in a folder
+                    for ext in ['*.jpg', '*.jpeg', '*.png', '*.bmp']:
+                        for img_path in glob.glob(os.path.join(image_dir, ext)):
+                            try:
+                                img = Image.open(img_path).convert('RGB')
+                                images.append((os.path.basename(img_path), np.array(img)))
+                            except Exception as e:
+                                print(f"Error loading image {img_path}: {str(e)}")
         
         # Handle uploaded images
         elif dataset_type == 'upload':

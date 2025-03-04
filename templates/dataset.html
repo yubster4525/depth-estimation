@@ -31,7 +31,7 @@
                                 <select id="dataset-select" class="form-select">
                                     <option value="">-- Select a dataset --</option>
                                     {% for dataset in available_datasets %}
-                                    <option value="{{ dataset.path }}">{{ dataset.name }} ({{ dataset.image_count }} images)</option>
+                                    <option value="{{ dataset.path }}">{{ dataset.name }} ({{ dataset.image_count }} images){% if dataset.has_splits %} [has splits]{% endif %}</option>
                                     {% endfor %}
                                 </select>
                                 <small class="text-muted">Datasets from custom_datasets directory</small>
@@ -44,6 +44,7 @@
                                     <option value="val">Validation</option>
                                     <option value="test">Test</option>
                                 </select>
+                                <small class="text-muted">SYNS-Patches has val and test splits</small>
                             </div>
                             
                             <div class="mb-3">
