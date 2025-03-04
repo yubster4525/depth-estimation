@@ -3,6 +3,7 @@ import io
 import base64
 import numpy as np
 import json
+import glob
 from collections import defaultdict
 
 # Try to import cv2, but fall back to PIL if necessary
