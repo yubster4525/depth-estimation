@@ -279,6 +279,6 @@ def download_models_page():
 # Run the Flask app
 # -------------------------------
 if __name__ == '__main__':
-    port = 8083
+    port = 8084  # Changed from 8083 to avoid conflicts
     print(f"Starting server on http://127.0.0.1:{port}")
     app.run(host='127.0.0.1', port=port, debug=True, threaded=True)
