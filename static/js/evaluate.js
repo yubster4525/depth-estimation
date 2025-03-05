@@ -104,6 +104,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 
                 // Add metrics
                 if (result.metrics) {
+                    // Add standard metrics
                     row.innerHTML += `
                         <td>${formatMetric(result.metrics.AbsRel)}</td>
                         <td>${formatMetric(result.metrics.SqRel)}</td>
@@ -113,8 +114,42 @@ document.addEventListener('DOMContentLoaded', function() {
                         <td>${formatMetric(result.metrics.delta2, true)}</td>
                         <td>${formatMetric(result.metrics.delta3, true)}</td>
                     `;
+                    
+                    // Check if we have edge metrics
+                    if (result.metrics['F-Score'] !== undefined) {
+                        // Add F-Score to existing table or dynamically add column if it doesn't exist
+                        const headerRow = document.querySelector('#metrics-table thead tr');
+                        if (!headerRow.querySelector('th[data-metric="f-score"]')) {
+                            // Add F-Score column to header
+                            const fScoreHeader = document.createElement('th');
+                            fScoreHeader.setAttribute('data-metric', 'f-score');
+                            fScoreHeader.innerHTML = 'F-Score ↑';
+                            headerRow.appendChild(fScoreHeader);
+                            
+                            // Add edge visualization column if we have edge maps
+                            if (result.edge_map) {
+                                const edgeImgHeader = document.createElement('th');
+                                edgeImgHeader.innerHTML = 'Edges';
+                                headerRow.insertBefore(edgeImgHeader, headerRow.querySelector('th:nth-child(3)'));
+                            }
+                        }
+                        
+                        // Add edge visualization to row if it exists
+                        if (result.edge_map && !row.querySelector('td:nth-child(3) img')) {
+                            const depthCell = row.querySelector('td:nth-child(2)');
+                            const edgeCell = document.createElement('td');
+                            edgeCell.innerHTML = `<img src="${result.edge_map}" alt="${result.model_name} edges" class="table-thumb">`;
+                            row.insertBefore(edgeCell, depthCell.nextSibling);
+                        }
+                        
+                        // Add F-Score cell
+                        const fScoreCell = document.createElement('td');
+                        fScoreCell.innerHTML = formatMetric(result.metrics['F-Score'], true);
+                        row.appendChild(fScoreCell);
+                    }
                 } else if (result.error) {
-                    row.innerHTML += `<td colspan="7" class="error">${result.error}</td>`;
+                    const colSpan = document.querySelectorAll('#metrics-table thead th').length - 3;
+                    row.innerHTML += `<td colspan="${colSpan}" class="error">${result.error}</td>`;
                 }
                 
                 metricsResults.appendChild(row);

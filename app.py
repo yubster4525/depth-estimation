@@ -254,12 +254,41 @@ def dataset_page():
         # If any model files are missing, show the download instructions page
         return render_template('download.html', missing_models=missing_models)
 
+    # Add custom models to MODELS dictionary if they exist
+    # This will make trained MDEC UNet models available for evaluation
+    custom_models_dir = os.path.join(os.getcwd(), 'custom_models', 'trained')
+    if os.path.exists(custom_models_dir):
+        for model_id in os.listdir(custom_models_dir):
+            model_path = os.path.join(custom_models_dir, model_id)
+            
+            # Check if it has required files
+            if (os.path.isdir(model_path) and 
+                os.path.exists(os.path.join(model_path, 'model.pth')) and
+                os.path.exists(os.path.join(model_path, 'info.json'))):
+                
+                # Load model info
+                with open(os.path.join(model_path, 'info.json'), 'r') as f:
+                    model_info = json.load(f)
+                
+                # Add model to MODELS dictionary if it's not already there
+                custom_model_id = f"custom_{model_id}"
+                if custom_model_id not in MODELS:
+                    MODELS[custom_model_id] = {
+                        'name': model_info.get('name', f'Custom Model {model_id}'),
+                        'path': os.path.join(model_path, 'model.pth'),
+                        'type': model_info.get('type', 'unet') if 'mdec' not in model_info.get('type', '') else 'mdec_unet',
+                        'input_size': model_info.get('input_size', (256, 256)),
+                        'description': model_info.get('description', 'Custom trained depth estimation model'),
+                        'is_custom': True
+                    }
+
     # Prepare model info for the template
     template_models = {}
     for model_id, model_info in MODELS.items():
         template_models[model_id] = {
             'name': model_info['name'],
-            'description': model_info['description']
+            'description': model_info['description'],
+            'type': model_info['type']  # Include model type to identify MDEC models
         }
     
     # Get available datasets
@@ -277,25 +306,43 @@ def dataset_page():
             # Count images - look for direct images or nested folders
             image_count = 0
             
-            # First check if there are direct images in an 'images' subfolder
-            if os.path.exists(os.path.join(dataset_path, 'images')):
-                direct_image_dir = os.path.join(dataset_path, 'images')
-                for ext in ['*.jpg', '*.jpeg', '*.png', '*.bmp']:
-                    image_count += len(glob.glob(os.path.join(direct_image_dir, ext)))
+            # Check if this is a KITTI dataset
+            is_kitti = False
+            if os.path.exists(os.path.join(dataset_path, 'splits')):
+                # Count KITTI images in split files
+                for split_name in os.listdir(os.path.join(dataset_path, 'splits')):
+                    split_dir = os.path.join(dataset_path, 'splits', split_name)
+                    if os.path.isdir(split_dir):
+                        for mode in ['train', 'val', 'test']:
+                            split_file = os.path.join(split_dir, f'{mode}_files.txt')
+                            if os.path.exists(split_file):
+                                with open(split_file, 'r') as f:
+                                    image_count += len(f.readlines())
+                
+                if image_count > 0:
+                    is_kitti = True
             
-            # For datasets like SYNS-Patches with nested structure
-            if image_count == 0:
-                # Look for nested image directories
-                for subdir in glob.glob(os.path.join(dataset_path, '*')):
-                    if os.path.isdir(subdir) and os.path.exists(os.path.join(subdir, 'images')):
-                        nested_image_dir = os.path.join(subdir, 'images')
-                        for ext in ['*.jpg', '*.jpeg', '*.png', '*.bmp']:
-                            image_count += len(glob.glob(os.path.join(nested_image_dir, ext)))
-            
-            # Fallback to direct images in the dataset folder
-            if image_count == 0:
-                for ext in ['*.jpg', '*.jpeg', '*.png', '*.bmp']:
-                    image_count += len(glob.glob(os.path.join(dataset_path, ext)))
+            # If not KITTI, check other dataset formats
+            if not is_kitti:
+                # First check if there are direct images in an 'images' subfolder
+                if os.path.exists(os.path.join(dataset_path, 'images')):
+                    direct_image_dir = os.path.join(dataset_path, 'images')
+                    for ext in ['*.jpg', '*.jpeg', '*.png', '*.bmp']:
+                        image_count += len(glob.glob(os.path.join(direct_image_dir, ext)))
+                
+                # For datasets like SYNS-Patches with nested structure
+                if image_count == 0:
+                    # Look for nested image directories
+                    for subdir in glob.glob(os.path.join(dataset_path, '*')):
+                        if os.path.isdir(subdir) and os.path.exists(os.path.join(subdir, 'images')):
+                            nested_image_dir = os.path.join(subdir, 'images')
+                            for ext in ['*.jpg', '*.jpeg', '*.png', '*.bmp']:
+                                image_count += len(glob.glob(os.path.join(nested_image_dir, ext)))
+                
+                # Fallback to direct images in the dataset folder
+                if image_count == 0:
+                    for ext in ['*.jpg', '*.jpeg', '*.png', '*.bmp']:
+                        image_count += len(glob.glob(os.path.join(dataset_path, ext)))
             
             if image_count > 0:
                 # Check if it has split files
@@ -305,7 +352,8 @@ def dataset_page():
                     'name': dataset_name,
                     'path': dataset_path,
                     'image_count': image_count,
-                    'has_splits': has_splits
+                    'has_splits': has_splits,
+                    'is_kitti': is_kitti
                 })
 
     context = {
@@ -556,6 +604,99 @@ def create_depth_colormap(depth_map):
     return Image.fromarray(colored_depth)
 
 
+def extract_edges(depth, preprocess='log', sigma=1, mask=None, use_canny=True):
+    """
+    Detect edges in a depth map.
+    
+    Args:
+        depth (numpy.ndarray): Depth map to extract edges from.
+        preprocess (str): Preprocessing method ('log', 'inv', 'none').
+        sigma (int): Gaussian blurring sigma.
+        mask (numpy.ndarray, optional): Mask of valid pixels.
+        use_canny (bool): If True, use Canny edge detection, otherwise use Sobel.
+        
+    Returns:
+        numpy.ndarray: Binary edge map.
+    """
+    from skimage.feature import canny
+    
+    depth = depth.squeeze()
+    
+    # Preprocess depth map
+    if preprocess == 'log':
+        # Log transform
+        depth = np.log(depth.clip(min=1e-6))
+    elif preprocess == 'inv':
+        # Inverse transform (disparity)
+        depth = 1.0 / depth.clip(min=1e-6)
+        depth -= depth.min()  # Normalize disp to emphasize edges
+        depth /= depth.max()
+    
+    # Detect edges
+    if use_canny:
+        edges = canny(depth, sigma=sigma, mask=mask)
+    else:
+        # Sobel edge detection
+        depth = cv2.GaussianBlur(depth, (3, 3), sigmaX=sigma, sigmaY=sigma)
+        dx = cv2.Sobel(src=depth, ddepth=cv2.CV_64F, dx=1, dy=0, ksize=5)
+        dy = cv2.Sobel(src=depth, ddepth=cv2.CV_64F, dx=0, dy=1, ksize=5)
+        
+        edges = np.sqrt(dx**2 + dy**2)
+        edges = edges > edges.mean()
+        if mask is not None:
+            edges *= mask
+    
+    return edges
+
+def metrics_edge(pred, target, mask=None):
+    """
+    Compute edge-based metrics for depth evaluation.
+    
+    Args:
+        pred (numpy.ndarray): Predicted depth map.
+        target (numpy.ndarray): Ground truth depth map.
+        mask (numpy.ndarray, optional): Mask of valid pixels.
+        
+    Returns:
+        dict: Dictionary of metrics.
+    """
+    from scipy import ndimage
+    
+    # Default threshold for distance transform
+    th_edges = 10
+    
+    # Extract edges from ground truth and prediction
+    gt_edges = extract_edges(target, preprocess='log', sigma=1, mask=mask)
+    pred_edges = extract_edges(pred, preprocess='log', sigma=1, mask=mask)
+    
+    # Distance transforms
+    D_target = ndimage.distance_transform_edt(1 - gt_edges)  # Distance to ground truth edges
+    D_pred = ndimage.distance_transform_edt(1 - pred_edges)  # Distance to predicted edges
+    
+    # Compute precision, recall, and F-score
+    # Precision: How many predicted edges are close to ground truth edges
+    close_to_gt = (D_target < th_edges)
+    precision = np.sum(pred_edges & close_to_gt) / (np.sum(pred_edges) + 1e-6)
+    
+    # Recall: How many ground truth edges have a predicted edge nearby
+    close_to_pred = (D_pred < th_edges)
+    recall = np.sum(gt_edges & close_to_pred) / (np.sum(gt_edges) + 1e-6)
+    
+    # F-score
+    f_score = 2 * precision * recall / (precision + recall + 1e-6)
+    
+    # Edge accuracy and completeness
+    edge_acc = D_target[pred_edges].mean() if pred_edges.sum() else th_edges  # Distance from pred to target
+    edge_comp = D_pred[gt_edges].mean() if gt_edges.sum() else th_edges  # Distance from target to pred
+    
+    return {
+        'F-Score': float(f_score),
+        'Precision': float(precision),
+        'Recall': float(recall), 
+        'EdgeAcc': float(edge_acc),
+        'EdgeComp': float(edge_comp)
+    }
+
 def metrics_eigen(pred, target, mask=None):
     """
     Compute Eigen depth evaluation metrics.
@@ -648,7 +789,7 @@ def align_depths(pred, target, mask=None):
     return aligned_pred
 
 
-def evaluate_depth_prediction(pred_depth, gt_depth, eval_mode='mono'):
+def evaluate_depth_prediction(pred_depth, gt_depth, eval_mode='mono', metrics_types=None):
     """
     Evaluate a depth prediction against ground truth.
     
@@ -658,10 +799,15 @@ def evaluate_depth_prediction(pred_depth, gt_depth, eval_mode='mono'):
         eval_mode (str): Evaluation mode ('mono' or 'stereo').
             - 'mono': Scale-invariant evaluation (align pred to gt).
             - 'stereo': Fixed-scale evaluation.
+        metrics_types (list): List of metric types to compute ('eigen', 'edge').
             
     Returns:
         dict: Dictionary of metrics.
     """
+    # Default metrics types if not specified
+    if metrics_types is None:
+        metrics_types = ['eigen']
+    
     # Ensure same shape
     if pred_depth.shape != gt_depth.shape:
         # Resize prediction to match ground truth
@@ -688,10 +834,20 @@ def evaluate_depth_prediction(pred_depth, gt_depth, eval_mode='mono'):
     if eval_mode == 'mono':
         pred_depth = align_depths(pred_depth, gt_depth, mask)
     
-    # Compute metrics
-    metrics = metrics_eigen(pred_depth, gt_depth, mask)
+    # Compute all requested metrics
+    all_metrics = {}
     
-    return metrics
+    # Standard Eigen metrics
+    if 'eigen' in metrics_types:
+        eigen_metrics = metrics_eigen(pred_depth, gt_depth, mask)
+        all_metrics.update(eigen_metrics)
+    
+    # Edge-based metrics
+    if 'edge' in metrics_types:
+        edge_metrics = metrics_edge(pred_depth, gt_depth, mask)
+        all_metrics.update(edge_metrics)
+    
+    return all_metrics
 
 
 @app.route('/evaluate', methods=['GET'])
@@ -743,8 +899,47 @@ def evaluate_ground_truth():
         gt_viz_path = os.path.join(app.config['GROUND_TRUTH_FOLDER'], 'ground_truth_viz.jpg')
         gt_viz.save(gt_viz_path)
         
+        # Check if edge metrics were requested
+        include_edge_metrics = 'edge' in selected_metrics
+        metrics_types = selected_metrics
+        
+        # If edge metrics are requested, also create edge visualization for ground truth
+        if include_edge_metrics:
+            gt_edges = extract_edges(gt_depth, preprocess='log', sigma=1)
+            gt_edges_viz = Image.fromarray((gt_edges * 255).astype(np.uint8))
+            gt_edges_path = os.path.join(app.config['GROUND_TRUTH_FOLDER'], 'ground_truth_edges.jpg')
+            gt_edges_viz.save(gt_edges_path)
+        
         # Process with all models
         results = []
+        
+        # Add custom models from mdec_unet if they exist
+        # This will make trained MDEC UNet models available for evaluation
+        custom_models_dir = os.path.join(os.getcwd(), 'custom_models', 'trained')
+        if os.path.exists(custom_models_dir):
+            for model_id in os.listdir(custom_models_dir):
+                model_path = os.path.join(custom_models_dir, model_id)
+                
+                # Check if it has required files
+                if (os.path.isdir(model_path) and 
+                    os.path.exists(os.path.join(model_path, 'model.pth')) and
+                    os.path.exists(os.path.join(model_path, 'info.json'))):
+                    
+                    # Load model info
+                    with open(os.path.join(model_path, 'info.json'), 'r') as f:
+                        model_info = json.load(f)
+                    
+                    # Add model to MODELS dictionary if it's not already there
+                    custom_model_id = f"custom_{model_id}"
+                    if custom_model_id not in MODELS:
+                        MODELS[custom_model_id] = {
+                            'name': model_info.get('name', f'Custom Model {model_id}'),
+                            'path': os.path.join(model_path, 'model.pth'),
+                            'type': model_info.get('type', 'unet'),
+                            'input_size': model_info.get('input_size', (256, 256)),
+                            'description': model_info.get('description', 'Custom trained depth estimation model'),
+                            'is_custom': True
+                        }
         
         for model_id in MODELS:
             try:
@@ -767,12 +962,19 @@ def evaluate_ground_truth():
                 # Get model prediction as raw depth map
                 pred_depth = predict_depth(rgb_img, model_id)
                 
-                # Compute metrics
-                metrics = evaluate_depth_prediction(pred_depth, gt_depth, eval_mode)
+                # Create edge visualization if requested
+                if include_edge_metrics:
+                    pred_edges = extract_edges(pred_depth, preprocess='log', sigma=1)
+                    pred_edges_viz = Image.fromarray((pred_edges * 255).astype(np.uint8))
+                    pred_edges_path = os.path.join(app.config['RESULT_FOLDER'], f'edges_{model_id}.jpg')
+                    pred_edges_viz.save(pred_edges_path)
+                
+                # Compute metrics with all requested metric types
+                metrics = evaluate_depth_prediction(pred_depth, gt_depth, eval_mode, metrics_types)
                 
                 print(f"Model {model_id} metrics: {metrics}")
                 
-                results.append({
+                result = {
                     'model_id': model_id,
                     'model_name': MODELS[model_id]['name'],
                     'inference_time': f"{inference_time:.2f}",
@@ -780,7 +982,14 @@ def evaluate_ground_truth():
                     'depth_min': f"{depth_min:.2f}",
                     'depth_max': f"{depth_max:.2f}",
                     'metrics': metrics
-                })
+                }
+                
+                # Add edge visualization path if available
+                if include_edge_metrics:
+                    result['edge_map'] = os.path.join('static', 'results', f'edges_{model_id}.jpg')
+                
+                results.append(result)
+                
             except Exception as e:
                 print(f"Error evaluating model {model_id}: {str(e)}")
                 results.append({
@@ -789,13 +998,19 @@ def evaluate_ground_truth():
                     'error': str(e)
                 })
         
-        # Return results
-        return jsonify({
+        # Prepare response with all visualizations
+        response = {
             'success': True,
             'original': os.path.join('static', 'uploads', 'eval_input.jpg'),
             'ground_truth_viz': os.path.join('static', 'ground_truth', 'ground_truth_viz.jpg'),
             'results': results
-        })
+        }
+        
+        # Add edge visualization if available
+        if include_edge_metrics:
+            response['ground_truth_edges'] = os.path.join('static', 'ground_truth', 'ground_truth_edges.jpg')
+        
+        return jsonify(response)
         
     except Exception as e:
         print(f"Error in ground truth evaluation: {str(e)}")

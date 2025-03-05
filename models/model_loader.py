@@ -7,6 +7,7 @@ import os
 import torch
 import torch.nn.functional as F
 import numpy as np
+import json
 from pathlib import Path
 
 # Try importing CV2, but fall back to PIL for image processing if not available
@@ -60,6 +61,112 @@ MODELS = {
 
 # Cache for loaded models
 loaded_models = {}
+
+def detect_custom_models():
+    """Detect custom trained models in the custom_models directory."""
+    custom_models = {}
+    
+    # Check custom_models/trained directory
+    trained_models_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'custom_models', 'trained')
+    if os.path.exists(trained_models_dir):
+        for model_id in os.listdir(trained_models_dir):
+            model_dir = os.path.join(trained_models_dir, model_id)
+            
+            # Skip if not a directory
+            if not os.path.isdir(model_dir):
+                continue
+                
+            # Check for model.pth and info.json
+            model_path = os.path.join(model_dir, 'model.pth')
+            info_path = os.path.join(model_dir, 'info.json')
+            
+            if os.path.exists(model_path) and os.path.exists(info_path):
+                try:
+                    with open(info_path, 'r') as f:
+                        model_info = json.load(f)
+                    
+                    # Add model to custom models dictionary
+                    custom_models[model_id] = {
+                        'name': model_info.get('name', f'Custom Model {model_id}'),
+                        'path': model_path,
+                        'type': model_info.get('type', 'unet'),
+                        'input_size': model_info.get('input_size', (256, 256)),
+                        'description': model_info.get('description', 'Custom trained depth estimation model'),
+                        'is_custom': True
+                    }
+                except Exception as e:
+                    print(f"Error loading custom model {model_id}: {e}")
+    
+    # Add custom models to global MODELS dictionary
+    if custom_models:
+        MODELS.update(custom_models)
+        print(f"Detected {len(custom_models)} custom trained models")
+    
+    return custom_models
+
+def load_unet_model(model_id):
+    """Load a UNet model."""
+    from models.unet import create_unet_model
+    
+    model_info = MODELS[model_id]
+    model_path = model_info["path"]
+    
+    # Get model parameters from info.json if available
+    info_path = os.path.join(os.path.dirname(model_path), "info.json")
+    if os.path.exists(info_path):
+        with open(info_path, 'r') as f:
+            model_params = json.load(f)
+        base_channels = model_params.get("channels", 64)
+    else:
+        base_channels = 64  # Default value
+    
+    # Create model
+    model = create_unet_model(
+        n_channels=3,
+        n_classes=1,
+        bilinear=True,
+        base_channels=base_channels,
+        pretrained=True,
+        weights_path=model_path
+    )
+    
+    # Move to correct device
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = model.to(device).eval()
+    
+    return model
+
+def load_mdec_unet_model(model_id):
+    """Load an MDEC-compatible UNet model."""
+    from models.mdec_unet import create_mdec_unet_model
+    
+    model_info = MODELS[model_id]
+    model_path = model_info["path"]
+    
+    # Get model parameters from info.json if available
+    info_path = os.path.join(os.path.dirname(model_path), "info.json")
+    if os.path.exists(info_path):
+        with open(info_path, 'r') as f:
+            model_params = json.load(f)
+        base_channels = model_params.get("channels", 64)
+    else:
+        base_channels = 64  # Default value
+    
+    # Create model
+    model = create_mdec_unet_model(
+        n_channels=3,
+        out_scales=(0, 1, 2, 3),
+        bilinear=True,
+        base_channels=base_channels,
+        pretrained=True,
+        weights_path=model_path
+    )
+    
+    # Move to correct device
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = model.to(device).eval()
+    
+    return model
 
 def preprocess_image(image, target_size):
     """Preprocess image for model input"""
