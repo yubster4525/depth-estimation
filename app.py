@@ -858,6 +858,14 @@ def evaluate_page():
     return render_template('evaluate.html', active_page='evaluate')
 
 
+@app.route('/documentation', methods=['GET'])
+def documentation_page():
+    """
+    Render the implementation documentation page.
+    """
+    return render_template('documentation.html', active_page='documentation')
+
+
 @app.route('/evaluate-ground-truth', methods=['POST'])
 def evaluate_ground_truth():
     """

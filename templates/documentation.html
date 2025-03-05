@@ -1,0 +1,794 @@
+{% extends "layout.html" %}
+
+{% block title %}Implementation Documentation{% endblock %}
+
+{% block head_extra %}
+<style>
+    .section-title {
+        border-bottom: 2px solid var(--primary-color);
+        padding-bottom: 0.5rem;
+        margin-top: 2rem;
+        margin-bottom: 1rem;
+    }
+    
+    .subsection-title {
+        border-left: 4px solid var(--secondary-color);
+        padding-left: 0.75rem;
+        margin-top: 1.5rem;
+        margin-bottom: 1rem;
+    }
+    
+    .code-block {
+        background-color: #f8f9fa;
+        border-radius: 4px;
+        padding: 1rem;
+        margin: 1rem 0;
+        font-family: monospace;
+        font-size: 0.9rem;
+    }
+    
+    .doc-card {
+        border-radius: 8px;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        margin-bottom: 1.5rem;
+        overflow: hidden;
+    }
+    
+    .doc-card-header {
+        background-color: var(--primary-color);
+        color: white;
+        padding: 0.75rem 1.25rem;
+    }
+    
+    .doc-card-body {
+        padding: 1.25rem;
+        background-color: white;
+    }
+    
+    .model-table, .dataset-table {
+        width: 100%;
+        border-collapse: collapse;
+    }
+    
+    .model-table th, .model-table td,
+    .dataset-table th, .dataset-table td {
+        padding: 0.5rem;
+        border: 1px solid #dee2e6;
+    }
+    
+    .model-table th, .dataset-table th {
+        background-color: #f8f9fa;
+    }
+    
+    .toc {
+        background-color: #f8f9fa;
+        border-radius: 4px;
+        padding: 1rem;
+        margin-bottom: 2rem;
+    }
+    
+    .toc ul {
+        margin-bottom: 0;
+    }
+    
+    .metrics-card {
+        background-color: #f1f8ff;
+        border-radius: 4px;
+        padding: 1rem;
+        margin: 1rem 0;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container">
+    <h1 class="mb-4">Depth Estimation Implementation Documentation</h1>
+    
+    <div class="toc">
+        <h4>Table of Contents</h4>
+        <ul>
+            <li><a href="#models">Available Models</a></li>
+            <li><a href="#datasets">Dataset Structures</a></li>
+            <li><a href="#training">Training Process</a></li>
+            <li><a href="#evaluation">Evaluation Metrics</a></li>
+            <li><a href="#pretrained">Pretrained Model Handling</a></li>
+            <li><a href="#inference">Inference Pipeline</a></li>
+            <li><a href="#custom">Custom Model Integration</a></li>
+        </ul>
+    </div>
+    
+    <section id="models">
+        <h2 class="section-title">Available Models</h2>
+        
+        <div class="doc-card">
+            <div class="doc-card-header">
+                <h3 class="m-0">UNet Architecture</h3>
+            </div>
+            <div class="doc-card-body">
+                <p>The custom UNet implementation consists of an encoder-decoder architecture with skip connections:</p>
+                <ul>
+                    <li><strong>Encoder:</strong> Series of convolutional blocks with increasing channels and decreasing spatial dimensions</li>
+                    <li><strong>Decoder:</strong> Series of upsampling blocks with decreasing channels and increasing spatial dimensions</li>
+                    <li><strong>Skip Connections:</strong> Connect corresponding encoder and decoder layers to preserve spatial information</li>
+                </ul>
+                <p>Key configuration options:</p>
+                <ul>
+                    <li><strong>Base Channels:</strong> Initial number of feature channels (default: 64)</li>
+                    <li><strong>Upsampling:</strong> Either bilinear upsampling or transposed convolutions</li>
+                    <li><strong>Output Activation:</strong> Sigmoid for normalized depth output</li>
+                </ul>
+                <div class="code-block">
+# Simplified UNet implementation
+class UNet(nn.Module):
+    def __init__(self, in_channels=3, base_channels=64, use_bilinear=True):
+        super(UNet, self).__init__()
+        self.inc = DoubleConv(in_channels, base_channels)
+        self.down1 = Down(base_channels, base_channels*2)
+        self.down2 = Down(base_channels*2, base_channels*4)
+        self.down3 = Down(base_channels*4, base_channels*8)
+        self.down4 = Down(base_channels*8, base_channels*16)
+        
+        self.up1 = Up(base_channels*16, base_channels*8, use_bilinear)
+        self.up2 = Up(base_channels*8, base_channels*4, use_bilinear)
+        self.up3 = Up(base_channels*4, base_channels*2, use_bilinear)
+        self.up4 = Up(base_channels*2, base_channels, use_bilinear)
+        
+        self.outc = OutConv(base_channels, 1)
+        self.sigmoid = nn.Sigmoid()
+        
+    def forward(self, x):
+        x1 = self.inc(x)
+        x2 = self.down1(x1)
+        x3 = self.down2(x2)
+        x4 = self.down3(x3)
+        x5 = self.down4(x4)
+        
+        x = self.up1(x5, x4)
+        x = self.up2(x, x3)
+        x = self.up3(x, x2)
+        x = self.up4(x, x1)
+        
+        logits = self.outc(x)
+        return self.sigmoid(logits)
+                </div>
+            </div>
+        </div>
+        
+        <div class="doc-card">
+            <div class="doc-card-header">
+                <h3 class="m-0">MDEC UNet</h3>
+            </div>
+            <div class="doc-card-body">
+                <p>The MDEC UNet extends the base UNet to support multi-scale outputs and additional features required for MDEC benchmark compatibility:</p>
+                <ul>
+                    <li><strong>Multi-scale Outputs:</strong> Produces depth predictions at different resolutions</li>
+                    <li><strong>Scale-aware Features:</strong> Supports multi-scale supervision during training</li>
+                    <li><strong>Configurable Decoder:</strong> Enhanced decoder blocks with skip connections</li>
+                </ul>
+                <div class="code-block">
+# MDEC UNet with multi-scale output support
+class MDECUNet(nn.Module):
+    def __init__(self, in_channels=3, base_channels=64, scales=[0, 1, 2, 3]):
+        super(MDECUNet, self).__init__()
+        # Encoder
+        self.encoder_blocks = nn.ModuleList()
+        # Decoder with multi-scale outputs
+        self.decoder_blocks = nn.ModuleList() 
+        self.output_convs = nn.ModuleDict()
+        
+        # For each scale, create output convolutional block
+        for scale in scales:
+            self.output_convs[f'scale_{scale}'] = OutConv(...)
+    
+    def forward(self, x):
+        # Encoder pass
+        # Decoder pass with skip connections
+        
+        # Multi-scale outputs
+        outputs = {}
+        for scale in self.scales:
+            outputs[f'scale_{scale}'] = self.output_convs[f'scale_{scale}'](...)
+            
+        return outputs
+                </div>
+            </div>
+        </div>
+        
+        <div class="doc-card">
+            <div class="doc-card-header">
+                <h3 class="m-0">Supported Model Types</h3>
+            </div>
+            <div class="doc-card-body">
+                <p>The framework supports various model types and formats:</p>
+                
+                <table class="model-table">
+                    <thead>
+                        <tr>
+                            <th>Model Type</th>
+                            <th>Format</th>
+                            <th>Description</th>
+                            <th>Input Size</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>MiDaS Small</td>
+                            <td>ONNX</td>
+                            <td>Lightweight model for fast inference</td>
+                            <td>256×256</td>
+                        </tr>
+                        <tr>
+                            <td>DPT Hybrid</td>
+                            <td>ONNX / PyTorch</td>
+                            <td>Balanced speed/accuracy with Vision Transformer</td>
+                            <td>384×384</td>
+                        </tr>
+                        <tr>
+                            <td>DPT Large</td>
+                            <td>ONNX / PyTorch</td>
+                            <td>Highest quality depth estimation</td>
+                            <td>384×384</td>
+                        </tr>
+                        <tr>
+                            <td>MonoDepth2</td>
+                            <td>PyTorch</td>
+                            <td>Self-supervised trained with ResNet encoder</td>
+                            <td>640×192</td>
+                        </tr>
+                        <tr>
+                            <td>Custom UNet</td>
+                            <td>PyTorch</td>
+                            <td>Trainable encoder-decoder with skip connections</td>
+                            <td>Configurable</td>
+                        </tr>
+                        <tr>
+                            <td>MDEC UNet</td>
+                            <td>PyTorch</td>
+                            <td>Multi-scale UNet for MDEC benchmark</td>
+                            <td>Configurable</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </section>
+    
+    <section id="datasets">
+        <h2 class="section-title">Dataset Structures</h2>
+        
+        <div class="doc-card">
+            <div class="doc-card-header">
+                <h3 class="m-0">Supported Dataset Formats</h3>
+            </div>
+            <div class="doc-card-body">
+                <p>The framework supports multiple dataset formats:</p>
+                
+                <table class="dataset-table">
+                    <thead>
+                        <tr>
+                            <th>Dataset Type</th>
+                            <th>Structure</th>
+                            <th>Formats</th>
+                            <th>Detection Method</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>Simple RGB-D</td>
+                            <td>
+                                <pre>dataset/
+├── images/
+│   ├── img1.png
+│   ├── img2.png
+├── depths/
+│   ├── img1.png
+│   ├── img2.png</pre>
+                            </td>
+                            <td>PNG, JPG (RGB)<br>PNG, NPY, EXR (Depth)</td>
+                            <td>Presence of images/ and depths/ folders</td>
+                        </tr>
+                        <tr>
+                            <td>SYNS-Patches</td>
+                            <td>
+                                <pre>syns_patches/
+├── 01/
+│   ├── images/
+│   │   ├── 00.png
+│   │   ├── 01.png
+│   ├── O_14_1.txt
+├── 02/
+│   ├── images/
+│   │   ├── 00.png</pre>
+                            </td>
+                            <td>PNG (RGB)<br>TXT (LiDAR data)</td>
+                            <td>Nested structure with numbered folders</td>
+                        </tr>
+                        <tr>
+                            <td>KITTI</td>
+                            <td>
+                                <pre>kitti/
+├── splits/
+│   ├── eigen/
+│   │   ├── train_files.txt
+│   │   ├── val_files.txt
+├── 2011_09_26/
+│   ├── 2011_09_26_drive_0001_sync/
+│   │   ├── image_02/
+│   │   │   ├── data/</pre>
+                            </td>
+                            <td>PNG (RGB)<br>TXT (Split files)</td>
+                            <td>Presence of splits/ directory</td>
+                        </tr>
+                    </tbody>
+                </table>
+                
+                <h4 class="subsection-title">Dataset Loading Pipeline</h4>
+                <ol>
+                    <li><strong>Dataset Detection:</strong> Automatic detection of dataset type based on directory structure</li>
+                    <li><strong>Split Handling:</strong> Parsing train/val/test splits if available</li>
+                    <li><strong>Transforms:</strong> Application of preprocessing and augmentation transforms</li>
+                    <li><strong>Batching:</strong> Combining samples into batches with proper collation</li>
+                </ol>
+                
+                <div class="code-block">
+# Example dataset loading code
+def load_dataset(dataset_path, split='train'):
+    # Detect dataset type
+    if os.path.exists(os.path.join(dataset_path, 'splits')):
+        # KITTI dataset
+        from kitti_dataset_helper import KittiDatasetAccessor
+        dataset = KittiDatasetAccessor(dataset_path, split=split)
+    elif is_nested_structure(dataset_path):
+        # SYNS-Patches dataset
+        from mdec_benchmark.src.datasets.syns_patches import SYNSPatchesDataset
+        dataset = SYNSPatchesDataset(dataset_path, split=split)
+    else:
+        # Simple RGB-D dataset
+        dataset = SimpleRGBDDataset(dataset_path, split=split)
+    
+    return dataset
+                </div>
+            </div>
+        </div>
+    </section>
+    
+    <section id="training">
+        <h2 class="section-title">Training Process</h2>
+        
+        <div class="doc-card">
+            <div class="doc-card-header">
+                <h3 class="m-0">Training Pipeline</h3>
+            </div>
+            <div class="doc-card-body">
+                <h4 class="subsection-title">Model Initialization</h4>
+                <p>The training process begins with model initialization:</p>
+                <ul>
+                    <li><strong>Architecture Selection:</strong> UNet or MDEC UNet based on configuration</li>
+                    <li><strong>Parameter Configuration:</strong> Base channels, input size, bilinear upsampling</li>
+                    <li><strong>Weight Initialization:</strong> Kaiming initialization for convolutional layers</li>
+                </ul>
+                
+                <h4 class="subsection-title">Loss Functions</h4>
+                <p>The framework supports multiple loss functions for depth estimation:</p>
+                <ul>
+                    <li><strong>Scale-Invariant Loss:</strong> For monocular depth estimation that handles global scale ambiguity</li>
+                    <li><strong>Edge-Aware Smoothness:</strong> Encourages depth smoothness while preserving edges</li>
+                    <li><strong>L1 Loss:</strong> For supervised training with ground truth</li>
+                    <li><strong>Berhu Loss:</strong> Combination of L1 and L2 loss for better handling of outliers</li>
+                </ul>
+                
+                <div class="code-block">
+# Scale-invariant loss implementation
+def scale_invariant_loss(pred, target, mask=None):
+    if mask is None:
+        mask = torch.ones_like(pred, dtype=torch.bool)
+    
+    # Apply mask
+    pred_masked = pred[mask]
+    target_masked = target[mask]
+    
+    # Calculate log difference
+    diff = torch.log(pred_masked) - torch.log(target_masked)
+    
+    # Scale-invariant loss terms
+    loss = torch.mean(diff**2) - 0.5 * (torch.mean(diff))**2
+    
+    return loss
+                </div>
+                
+                <h4 class="subsection-title">Training Loop</h4>
+                <p>The main training loop includes:</p>
+                <ol>
+                    <li><strong>Data Loading:</strong> Batches from the dataset with augmentation</li>
+                    <li><strong>Forward Pass:</strong> Generate depth predictions</li>
+                    <li><strong>Loss Calculation:</strong> Compute loss based on selected functions</li>
+                    <li><strong>Backward Pass:</strong> Calculate gradients and update weights</li>
+                    <li><strong>Validation:</strong> Periodic evaluation on validation set</li>
+                    <li><strong>Checkpointing:</strong> Save model at intervals and best performance</li>
+                </ol>
+                
+                <h4 class="subsection-title">Optimizer and Scheduler</h4>
+                <ul>
+                    <li><strong>Optimizer:</strong> Adam with configurable learning rate (default: 1e-4)</li>
+                    <li><strong>Learning Rate Scheduler:</strong> ReduceLROnPlateau based on validation loss</li>
+                    <li><strong>Early Stopping:</strong> Optional early stopping based on validation metrics</li>
+                </ul>
+                
+                <h4 class="subsection-title">Logging and Visualization</h4>
+                <ul>
+                    <li><strong>TensorBoard:</strong> Optional logging of losses, metrics, and visualizations</li>
+                    <li><strong>Progress Updates:</strong> Epoch-wise progress with key metrics</li>
+                    <li><strong>Visualization:</strong> Periodic depth map visualizations during training</li>
+                </ul>
+            </div>
+        </div>
+    </section>
+    
+    <section id="evaluation">
+        <h2 class="section-title">Evaluation Metrics</h2>
+        
+        <div class="doc-card">
+            <div class="doc-card-header">
+                <h3 class="m-0">Depth Evaluation Metrics</h3>
+            </div>
+            <div class="doc-card-body">
+                <div class="metrics-card">
+                    <h4>Eigen Metrics</h4>
+                    <p>Standard metrics from Eigen et al. (2014) used for evaluating monocular depth estimation:</p>
+                    <ul>
+                        <li><strong>AbsRel:</strong> Absolute Relative error - Mean of |d_pred - d_gt| / d_gt</li>
+                        <li><strong>SqRel:</strong> Squared Relative error - Mean of (d_pred - d_gt)² / d_gt</li>
+                        <li><strong>RMSE:</strong> Root Mean Squared Error - √(Mean of (d_pred - d_gt)²)</li>
+                        <li><strong>LogRMSE:</strong> Log RMSE - √(Mean of (log(d_pred) - log(d_gt))²)</li>
+                        <li><strong>δ < 1.25, δ < 1.25², δ < 1.25³:</strong> Threshold accuracy - % of pixels where max(d_pred/d_gt, d_gt/d_pred) < threshold</li>
+                    </ul>
+                </div>
+                
+                <div class="metrics-card">
+                    <h4>Edge-based Metrics</h4>
+                    <p>Metrics for evaluating edge accuracy and preservation in depth maps:</p>
+                    <ul>
+                        <li><strong>F-Score:</strong> Harmonic mean of precision and recall for edge detection</li>
+                        <li><strong>Precision:</strong> Percentage of predicted edges that are close to ground truth edges</li>
+                        <li><strong>Recall:</strong> Percentage of ground truth edges that have a predicted edge nearby</li>
+                        <li><strong>EdgeAcc:</strong> Average distance from predicted edges to nearest ground truth edge</li>
+                        <li><strong>EdgeComp:</strong> Average distance from ground truth edges to nearest predicted edge</li>
+                    </ul>
+                </div>
+                
+                <h4 class="subsection-title">Evaluation Modes</h4>
+                <ul>
+                    <li><strong>Monocular Mode (scale-invariant):</strong> Aligns predicted depth to ground truth using least squares</li>
+                    <li><strong>Stereo Mode (fixed-scale):</strong> Evaluates predictions without alignment</li>
+                </ul>
+                
+                <div class="code-block">
+# Edge extraction and F-score calculation
+def extract_edges(depth, preprocess='log', sigma=1, mask=None, use_canny=True):
+    from skimage.feature import canny
+    
+    depth = depth.squeeze()
+    
+    # Preprocess depth map
+    if preprocess == 'log':
+        depth = np.log(depth.clip(min=1e-6))
+    elif preprocess == 'inv':
+        depth = 1.0 / depth.clip(min=1e-6)
+        depth -= depth.min()
+        depth /= depth.max()
+    
+    # Detect edges
+    if use_canny:
+        edges = canny(depth, sigma=sigma, mask=mask)
+    else:
+        # Sobel edge detection
+        depth = cv2.GaussianBlur(depth, (3, 3), sigmaX=sigma, sigmaY=sigma)
+        dx = cv2.Sobel(src=depth, ddepth=cv2.CV_64F, dx=1, dy=0, ksize=5)
+        dy = cv2.Sobel(src=depth, ddepth=cv2.CV_64F, dx=0, dy=1, ksize=5)
+        
+        edges = np.sqrt(dx**2 + dy**2)
+        edges = edges > edges.mean()
+        if mask is not None:
+            edges *= mask
+    
+    return edges
+
+def metrics_edge(pred, target, mask=None):
+    from scipy import ndimage
+    
+    th_edges = 10  # Threshold for distance transform
+    
+    # Extract edges
+    gt_edges = extract_edges(target, preprocess='log', sigma=1, mask=mask)
+    pred_edges = extract_edges(pred, preprocess='log', sigma=1, mask=mask)
+    
+    # Distance transforms
+    D_target = ndimage.distance_transform_edt(1 - gt_edges)
+    D_pred = ndimage.distance_transform_edt(1 - pred_edges)
+    
+    # Precision: How many predicted edges are close to ground truth edges
+    close_to_gt = (D_target < th_edges)
+    precision = np.sum(pred_edges & close_to_gt) / (np.sum(pred_edges) + 1e-6)
+    
+    # Recall: How many ground truth edges have a predicted edge nearby
+    close_to_pred = (D_pred < th_edges)
+    recall = np.sum(gt_edges & close_to_pred) / (np.sum(gt_edges) + 1e-6)
+    
+    # F-score
+    f_score = 2 * precision * recall / (precision + recall + 1e-6)
+    
+    return {
+        'F-Score': float(f_score),
+        'Precision': float(precision),
+        'Recall': float(recall),
+        'EdgeAcc': float(D_target[pred_edges].mean() if pred_edges.sum() else th_edges),
+        'EdgeComp': float(D_pred[gt_edges].mean() if gt_edges.sum() else th_edges)
+    }
+                </div>
+            </div>
+        </div>
+    </section>
+    
+    <section id="pretrained">
+        <h2 class="section-title">Pretrained Model Handling</h2>
+        
+        <div class="doc-card">
+            <div class="doc-card-header">
+                <h3 class="m-0">Model Management Framework</h3>
+            </div>
+            <div class="doc-card-body">
+                <h4 class="subsection-title">Model Downloader</h4>
+                <p>The model downloader system handles:</p>
+                <ul>
+                    <li><strong>Automatic Download:</strong> Retrieves models from sources like GitHub or HuggingFace</li>
+                    <li><strong>Validation:</strong> Verifies downloaded files with checksums</li>
+                    <li><strong>Extraction:</strong> Handles compressed model archives</li>
+                    <li><strong>Conversion:</strong> Optional format conversion (e.g., PyTorch to ONNX)</li>
+                </ul>
+                
+                <h4 class="subsection-title">Model Loading</h4>
+                <p>The model loader system provides:</p>
+                <ul>
+                    <li><strong>Format Detection:</strong> Automatic detection of model format (ONNX, PyTorch, etc.)</li>
+                    <li><strong>Preprocessing Pipeline:</strong> Model-specific input preprocessing</li>
+                    <li><strong>Device Placement:</strong> Automatic placement on CPU or CUDA</li>
+                    <li><strong>Model Caching:</strong> Efficient reuse of loaded models</li>
+                </ul>
+                
+                <h4 class="subsection-title">Preprocessing Pipelines</h4>
+                <p>Each model has specific preprocessing requirements:</p>
+                <ul>
+                    <li><strong>MiDaS:</strong> Resize to 256×256, normalize with specific mean/std</li>
+                    <li><strong>DPT:</strong> Resize to 384×384, normalize with ImageNet stats</li>
+                    <li><strong>MonoDepth2:</strong> Resize to 640×192, normalize with ImageNet stats</li>
+                    <li><strong>Custom UNet:</strong> Configurable input size, normalize with ImageNet stats</li>
+                </ul>
+                
+                <div class="code-block">
+# Model loading system from model_loader.py
+def load_model(model_id):
+    """Load a depth estimation model by ID."""
+    if model_id not in MODELS:
+        raise ValueError(f"Unknown model ID: {model_id}")
+    
+    model_info = MODELS[model_id]
+    model_path = model_info["path"]
+    model_type = model_info.get("type", "onnx")
+    
+    # Check if model exists
+    if not os.path.exists(model_path):
+        raise FileNotFoundError(f"Model file not found: {model_path}")
+    
+    # Load based on model type
+    if model_type == "onnx":
+        return load_onnx_model(model_path)
+    elif model_type == "pytorch":
+        return load_pytorch_model(model_path, model_info)
+    elif model_type == "torchscript":
+        return load_torchscript_model(model_path)
+    elif model_type == "unet":
+        return load_unet_model(model_path, model_info)
+    elif model_type == "mdec_unet":
+        return load_mdec_unet_model(model_path, model_info)
+    else:
+        raise ValueError(f"Unsupported model type: {model_type}")
+                </div>
+            </div>
+        </div>
+    </section>
+    
+    <section id="inference">
+        <h2 class="section-title">Inference Pipeline</h2>
+        
+        <div class="doc-card">
+            <div class="doc-card-header">
+                <h3 class="m-0">Depth Prediction Workflow</h3>
+            </div>
+            <div class="doc-card-body">
+                <h4 class="subsection-title">Input Processing</h4>
+                <ol>
+                    <li><strong>Image Loading:</strong> Load and convert image to RGB format</li>
+                    <li><strong>Preprocessing:</strong> Model-specific resizing and normalization</li>
+                    <li><strong>Tensor Conversion:</strong> Convert to tensor and add batch dimension</li>
+                    <li><strong>Device Placement:</strong> Transfer to appropriate device (CPU/GPU)</li>
+                </ol>
+                
+                <h4 class="subsection-title">Model Inference</h4>
+                <ol>
+                    <li><strong>Forward Pass:</strong> Run model to generate depth prediction</li>
+                    <li><strong>Output Processing:</strong> Extract depth map from model outputs</li>
+                    <li><strong>Post-processing:</strong> Model-specific scaling or normalization</li>
+                </ol>
+                
+                <h4 class="subsection-title">Depth Normalization Methods</h4>
+                <ul>
+                    <li><strong>Global Normalization:</strong> Normalize across all predictions in a dataset</li>
+                    <li><strong>Per-image Normalization:</strong> Normalize each depth map independently</li>
+                    <li><strong>Affine-invariant Normalization:</strong> Scale and shift using percentiles for robustness</li>
+                </ul>
+                
+                <div class="code-block">
+# Affine-invariant depth normalization
+def normalize_depth_affine_invariant(depth):
+    """
+    Normalize depth using affine-invariant approach with percentile clipping.
+    More robust to outliers than simple min-max normalization.
+    """
+    # Create mask for valid depths
+    mask_valid = depth > 0
+    depth_valid = depth[mask_valid]
+    
+    if len(depth_valid) > 0:
+        # Use percentiles instead of min/max for robustness
+        d_min = np.percentile(depth_valid, 5)
+        d_max = np.percentile(depth_valid, 95)
+        
+        # Apply normalization
+        norm_depth = (depth - d_min) / (d_max - d_min + 1e-8)
+        
+        # Clip to [0, 1] range
+        norm_depth = np.clip(norm_depth, 0, 1)
+        return norm_depth
+    else:
+        # Fallback if no valid depths
+        return np.zeros_like(depth)
+                </div>
+                
+                <h4 class="subsection-title">Batch Processing</h4>
+                <p>For dataset processing, the framework supports:</p>
+                <ul>
+                    <li><strong>Parallel Processing:</strong> Multi-threaded batch processing for efficiency</li>
+                    <li><strong>Result Storage:</strong> Structured storage of predictions in NPZ format</li>
+                    <li><strong>Visualization:</strong> Optional visualization of predictions for inspection</li>
+                </ul>
+            </div>
+        </div>
+    </section>
+    
+    <section id="custom">
+        <h2 class="section-title">Custom Model Integration</h2>
+        
+        <div class="doc-card">
+            <div class="doc-card-header">
+                <h3 class="m-0">Integrating Custom Models</h3>
+            </div>
+            <div class="doc-card-body">
+                <h4 class="subsection-title">Training Custom Models</h4>
+                <p>The framework supports training custom models through:</p>
+                <ol>
+                    <li><strong>Web Interface:</strong> Configure and train models through the Training page</li>
+                    <li><strong>Command Line:</strong> Run training scripts with configuration parameters</li>
+                    <li><strong>Configuration Files:</strong> Use YAML configs for advanced setups</li>
+                </ol>
+                
+                <h4 class="subsection-title">Model Storage Structure</h4>
+                <p>Custom trained models are stored with a standard structure:</p>
+                <pre>custom_models/
+├── trained/
+│   ├── unet_20250305_123456/
+│   │   ├── model.pth          # Model weights
+│   │   ├── info.json          # Model metadata
+│   │   ├── config.yaml        # Training configuration
+│   │   ├── depth_viz_*.png    # Visualization samples
+│   │   ├── metrics.json       # Evaluation metrics</pre>
+                
+                <h4 class="subsection-title">Model Metadata</h4>
+                <p>The <code>info.json</code> file contains key metadata:</p>
+                <div class="code-block">
+{
+    "name": "Custom UNet (KITTI)",
+    "type": "unet",
+    "input_size": [256, 256],
+    "base_channels": 64,
+    "use_bilinear": true,
+    "dataset": "kitti",
+    "date_trained": "2025-03-05T12:34:56",
+    "epochs": 50,
+    "learning_rate": 0.001,
+    "best_val_loss": 0.1234,
+    "description": "UNet trained on KITTI dataset with edge-aware loss"
+}
+                </div>
+                
+                <h4 class="subsection-title">Automatic Detection</h4>
+                <p>The framework automatically detects and integrates custom models:</p>
+                <ul>
+                    <li>Custom models appear in model selection dropdowns</li>
+                    <li>Models include proper preprocessing pipeline based on metadata</li>
+                    <li>Visually differentiated in UI to indicate custom-trained status</li>
+                </ul>
+                
+                <div class="code-block">
+# Custom model detection from app.py
+custom_models_dir = os.path.join(os.getcwd(), 'custom_models', 'trained')
+if os.path.exists(custom_models_dir):
+    for model_id in os.listdir(custom_models_dir):
+        model_path = os.path.join(custom_models_dir, model_id)
+        
+        # Check if it has required files
+        if (os.path.isdir(model_path) and 
+            os.path.exists(os.path.join(model_path, 'model.pth')) and
+            os.path.exists(os.path.join(model_path, 'info.json'))):
+            
+            # Load model info
+            with open(os.path.join(model_path, 'info.json'), 'r') as f:
+                model_info = json.load(f)
+            
+            # Add model to MODELS dictionary
+            custom_model_id = f"custom_{model_id}"
+            if custom_model_id not in MODELS:
+                MODELS[custom_model_id] = {
+                    'name': model_info.get('name', f'Custom Model {model_id}'),
+                    'path': os.path.join(model_path, 'model.pth'),
+                    'type': model_info.get('type', 'unet'),
+                    'input_size': model_info.get('input_size', (256, 256)),
+                    'description': model_info.get('description', 'Custom trained model'),
+                    'is_custom': True
+                }
+                </div>
+            </div>
+        </div>
+    </section>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // Add smooth scrolling for anchor links
+    document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+        anchor.addEventListener('click', function(e) {
+            e.preventDefault();
+            
+            const target = document.querySelector(this.getAttribute('href'));
+            if (target) {
+                window.scrollTo({
+                    top: target.offsetTop - 80,
+                    behavior: 'smooth'
+                });
+            }
+        });
+    });
+    
+    // Highlight current section in TOC based on scroll position
+    window.addEventListener('scroll', function() {
+        const sections = document.querySelectorAll('section[id]');
+        let currentSection = '';
+        
+        sections.forEach(section => {
+            const sectionTop = section.offsetTop - 100;
+            const sectionHeight = section.offsetHeight;
+            
+            if (window.scrollY >= sectionTop && window.scrollY < sectionTop + sectionHeight) {
+                currentSection = section.getAttribute('id');
+            }
+        });
+        
+        document.querySelectorAll('.toc a').forEach(link => {
+            link.classList.remove('active');
+            if (link.getAttribute('href') === `#${currentSection}`) {
+                link.classList.add('active');
+            }
+        });
+    });
+</script>
+{% endblock %}
